@@ -1,0 +1,14 @@
+# Custom permission for the app-level `scan_drive` command.
+# Tauri cannot auto-generate a permission identifier from a snake_case command
+# name (underscores are not allowed in identifiers), so we declare it explicitly
+# and reference `allow-scan-drive` from capabilities/default.json.
+
+[[permission]]
+identifier = "allow-scan-drive"
+description = "Allow the frontend to invoke the scan_drive command"
+commands.allow = ["scan_drive"]
+
+[[permission]]
+identifier = "allow-get-node"
+description = "Allow the frontend to invoke the get_node command"
+commands.allow = ["get_node"]

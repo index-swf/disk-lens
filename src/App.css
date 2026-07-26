@@ -1,0 +1,376 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #213547;
+  background-color: #f4f6fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* ---------- 整体布局 ---------- */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #1f2a44;
+  color: #fff;
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-size: 1.1rem;
+  margin: 0;
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.scan-btn {
+  border-radius: 8px;
+  border: 1px solid #4f8cff;
+  padding: 0.5em 1.2em;
+  font-size: 0.95em;
+  font-weight: 600;
+  color: #fff;
+  background-color: #4f8cff;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.scan-btn:hover:not(:disabled) {
+  background-color: #3a78ec;
+}
+.scan-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mock-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #cfd8ec;
+  cursor: pointer;
+}
+
+/* ---------- 驱动器选择 ---------- */
+.drive-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #e6ebf5;
+}
+.drive-selector select,
+.drive-custom-input {
+  padding: 0.4em 0.6em;
+  border-radius: 6px;
+  border: 1px solid #3a4a6b;
+  background: #2b3858;
+  color: #fff;
+  font-size: 0.9rem;
+}
+.drive-custom-input {
+  width: 180px;
+}
+
+/* ---------- 扫描进度 ---------- */
+.scan-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fff4e0;
+  border-bottom: 1px solid #ffe1a8;
+}
+.scan-progress-spinner {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #f0c36d;
+  border-top-color: #e08e0b;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.scan-progress-text {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.88rem;
+  color: #8a5a00;
+}
+.scan-progress-title {
+  font-weight: 600;
+}
+.scan-progress-current {
+  color: #a06a00;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.app-error {
+  padding: 8px 16px;
+  background: #ffe5e5;
+  color: #b00020;
+  font-size: 0.9rem;
+  border-bottom: 1px solid #ffc4c4;
+}
+
+/* ---------- 面包屑 ---------- */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 16px;
+  background: #eef2fb;
+  border-bottom: 1px solid #dde5f5;
+  font-size: 0.9rem;
+}
+.breadcrumb-link {
+  background: none;
+  border: none;
+  color: #2f6fed;
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+}
+.breadcrumb-link:hover {
+  text-decoration: underline;
+}
+.breadcrumb-current {
+  background: none;
+  border: none;
+  color: #1f2a44;
+  font-weight: 600;
+  cursor: default;
+  padding: 0;
+  font-size: inherit;
+}
+.breadcrumb-sep {
+  color: #9aa7c2;
+}
+
+/* ---------- 主分栏 ---------- */
+.app-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 12px;
+  gap: 12px;
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #e2e8f4;
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 0;
+}
+.panel-left {
+  flex: 0 0 40%;
+  max-width: 40%;
+}
+.panel-right {
+  flex: 1 1 60%;
+  min-width: 0;
+}
+.panel-head {
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  background: #f7f9fe;
+  border-bottom: 1px solid #e2e8f4;
+}
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}
+
+/* ---------- 数据表格 ---------- */
+.data-table-wrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f7f9fe;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e2e8f4;
+  z-index: 1;
+}
+.data-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f3fa;
+}
+.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.row-drillable {
+  cursor: pointer;
+}
+.row-drillable:hover {
+  background: #eef4ff;
+}
+.row-leaf {
+  color: #6b7891;
+}
+.table-placeholder,
+.treemap-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #9aa7c2;
+  font-size: 0.95rem;
+  text-align: center;
+  padding: 20px;
+}
+
+/* ---------- Treemap ---------- */
+.panel-right .panel-body > div {
+  height: 100%;
+  width: 100%;
+}
+
+/* ---------- 调试面板 ---------- */
+.debug-panel {
+  background: #eef2fb;
+  border-bottom: 1px solid #dde5f5;
+}
+.debug-head {
+  padding: 4px 16px;
+}
+.debug-toggle {
+  background: none;
+  border: none;
+  color: #1f2a44;
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.debug-body {
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.debug-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.debug-label {
+  font-size: 0.85rem;
+  color: #3a4a6b;
+}
+.debug-radios {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.debug-radio {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #213547;
+  cursor: pointer;
+}
+.debug-number {
+  width: 70px;
+  padding: 0.35em 0.5em;
+  border-radius: 6px;
+  border: 1px solid #c3cde3;
+  font-size: 0.85rem;
+}
+.debug-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #213547;
+  cursor: pointer;
+}
+.debug-select {
+  padding: 0.35em 0.5em;
+  border-radius: 6px;
+  border: 1px solid #c3cde3;
+  font-size: 0.85rem;
+  background: #fff;
+  color: #213547;
+}
+.debug-hint {
+  font-size: 0.75rem;
+  color: #8a96b3;
+}
+.debug-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #dde5f5;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #4a5878;
+}
+.debug-stats b {
+  color: #1f2a44;
+}
+
+/* ---------- 按需下钻 loading ---------- */
+.app-drilling {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: #e7f0ff;
+  color: #2f6fed;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #cfe0ff;
+}
+.app-drilling::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 2px solid #9cc0ff;
+  border-top-color: #2f6fed;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
