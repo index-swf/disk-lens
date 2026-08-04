@@ -1,102 +1,99 @@
-# USN 极速磁盘扫描器 — 项目接手说明（HANDOFF）
+# DiskLens — 项目交接与架构说明（HANDOFF）
 
-> 本文档由分析原 Qoder Agent 的本地记录（数据库 + 缓存）整理而成，用于接手继续开发。
-> 生成日期：2026-07-26。原开发中断原因：Qoder 赠送额度用尽。
-
----
-
-## 1. 项目一句话概述
-
-构建一个 **Windows 桌面应用「USN 极速磁盘扫描器」**（类似 TreeSize Free），
-核心卖点：**无需 UAC 管理员权限 + 极速扫描磁盘空间占用**，用 Treemap + 表格可视化。
-
-- 技术栈：**Tauri 2.x（Rust 后端）+ React 18 + TypeScript + Vite（前端）+ ECharts（Treemap）**
-- 扫描双引擎：优先 **USN 日志**（`windows-rs` + `FILE_FLAG_BACKUP_SEMANTICS` 免提权），失败自动降级 **`rayon` 并行目录遍历**
-- 需求原文见 `feature-description.md`，完整实施计划见 `.qoder/specs/USN_Fast_Disk_Scanner_9169af05.md`
+> 面向后续维护者的技术文档。README 是用户视角的简介，本文是开发者视角的架构与约定。
+> 本项目由 **AI Agent（WorkBuddy）辅助开发**，关键决策均有书面记录。
 
 ---
 
-## 2. 原 Agent 是怎么干的（工作流还原）
+## 1. 项目概述
 
-原 Qoder 会话标题「从零开始搭建项目」，用户「云扬」。它采用了**多子代理协作**模式：
+**DiskLens**：Windows 磁盘占用分析器（类似 TreeSize Free 的轻量开源替代品）。
+核心卖点：**极速扫描**（多线程并行遍历，C: 盘约 274 GB / 120 万文件实测约 8 秒）+ 可折叠树形列表呈现占用分布。
 
-1. **Plan 模式调研**：并行派出 3 个研究子代理，从三个视角出方案
-   - `Alex`（Plan A：简洁性/可维护性，主张 `jwalk`）
-   - `Sam`（Plan B：性能/可扩展性，主张 USN 优先 + rayon 降级 + arena 分配）
-   - `Jack`（Plan C：最小风险，指出 `jwalk` 版本被撤回不稳定，主张官方 `windows-rs` 直连）
-2. **综合评审**：合并三方结论 → 最终采用 **USN 优先 + rayon 降级** 的双引擎方案，放弃 `jwalk`。产出实施计划（即 spec 文件）。
-3. **用户批准计划** → 创建 4 个主任务（见下）。
-4. **派编码子代理 `Lee`** 搭脚手架 → 被取消。
-5. 用户反馈「国内下载慢」→ 改派 **`Taylor`**：先配 npm(npmmirror)/Cargo(rsproxy.cn) 镜像，再搭脚手架、`npm install`、装 Rust、`cargo check`。
-6. **中断点**：`Taylor` 装完 rustup、又发现缺 MSVC 构建工具，正在 `winget install VS BuildTools` 时额度耗尽，`cargo check` 尚未跑通。
-
-> 完整时间线（183 个操作）见 `会话操作日志.md`；对话原文见 `会话叙述.md`。
+- 桌面壳：**Tauri 2**（WebView2）
+- 前端：React 18 + TypeScript + Vite
+- 后端：Rust（`rayon` 多线程扫描引擎）
+- 开源协议：**MIT**
 
 ---
 
-## 3. 任务列表与完成情况
+## 2. 架构总览
 
-原 Agent 用 TaskCreate 建立了 4 个主任务，依赖关系：`1 → (2,3) → 4`。
-最后一次记录的状态如下：
+```
+React 前端 (src/)                 Rust 后端 (src-tauri/)
+┌──────────────────┐   Tauri IPC   ┌─────────────────────────────┐
+│ TreeTable 树列表  │ ◄───────────► │ lib.rs: scan_drive/get_node  │
+│ DriveSelector     │   invoke()    │   list_drives/pick_folder    │
+│ StatusBar         │               │ scanner/                     │
+│ ScanProgress      │ ◄─── emit ─── │   parallel.rs  并行遍历(主)  │
+└──────────────────┘   scan-progress│   prune.rs      树裁剪       │
+                                    │   volinfo.rs    卷信息       │
+                                    │   usn.rs        USN 日志(可选)│
+                                    └─────────────────────────────┘
+```
 
-| # | 任务 | 状态 | 说明 |
-|---|------|------|------|
-| 1 | 搭建 Tauri 2.x + React + Vite 项目脚手架 | 🟡 **进行中（≈90%）** | 文件已全建、依赖已装；仅差 `cargo check` 跑通（卡在 MSVC 构建工具） |
-| 2 | 实现 Rust 后端扫描引擎（2A~2E） | 🔴 **未开始** | 被任务 1 阻塞 |
-| 3 | 实现前端界面与数据可视化（3A~3F） | 🔴 **未开始** | 被任务 1 阻塞 |
-| 4 | 集成验证、错误处理与打包 | 🔴 **未开始** | 被任务 2、3 阻塞 |
+### 数据流
 
-任务 1 内部 todo（Taylor）：`.npmrc` ✅ / Cargo 镜像 ✅ / 脚手架文件 ✅ / `npm install` ✅ / `cargo check` ⏳（未完成）。
+1. `scan_drive` 扫描整个卷/目录，构建**完整树**并缓存在后端 `AppState`；
+2. 返回给前端的是一棵**裁剪树**（`prune`：深度预算 + 每层 Top N + "(其他 N 项)"聚合 + 散文件保留），控制 IPC 体积；
+3. 前端树形列表按需展开，遇到 `truncated` 节点调用 `get_node` 懒加载真实子树；
+4. `scan-progress` 事件流式上报扫描进度。
 
----
+### 关键设计决策
 
-## 4. 当前代码实际状态（已核对磁盘）
-
-**已存在（脚手架，可运行骨架）：**
-- 前端：`index.html`、`package.json`、`vite.config.ts`、`tsconfig.json`、`src/main.tsx`、`src/App.tsx`、`src/App.css`
-  - ⚠️ `App.tsx` 目前只是一个「Test IPC Connection」测试按钮，**没有任何扫描 UI**
-- 后端：`src-tauri/Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`
-  - ⚠️ `lib.rs` 只有一个 `greet()` hello-world 命令，**没有任何扫描逻辑**
-  - ✅ `Cargo.toml` 依赖已按计划配好：`windows 0.58`（含 Win32_Storage_FileSystem / System_IO / System_Ioctl）、`rayon 1.10`、`serde`、`serde_json`、`thiserror`、`tokio`
-- `.npmrc` 已配 npmmirror 镜像；`node_modules/`（45 包）与 `src-tauri/target/` 均已存在
-
-**尚未创建（需要新写的核心代码）：**
-- `src-tauri/src/models.rs`（TreeNode 数据模型）
-- `src-tauri/src/scanner/mod.rs`、`usn.rs`、`parallel.rs`、`tree_builder.rs`（扫描引擎，全部缺失）
-- `src/types/index.ts`、`src/components/`（TreemapChart / DataTable / Breadcrumb / ScanProgress / DriveSelector，全部缺失）
-
----
-
-## 5. 接手后的下一步（建议顺序）
-
-1. **打通环境**（完成任务 1 的最后一步）
-   - 确认 Rust 已装：`C:\Users\index\.cargo\bin\cargo.exe`
-   - **关键前提：安装 MSVC 构建工具**（原 Agent 卡在这里）。装 Visual Studio Build Tools 的「使用 C++ 的桌面开发」工作负载：
-     `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`
-   - 然后 `cd src-tauri && cargo check` 应能通过；`npm run tauri dev` 验证前后端 IPC。
-2. **任务 2：Rust 后端**（按 spec 的 2A→2B/2C→2D→2E）
-   - 先 `models.rs`（TreeNode），再并行遍历引擎 `parallel.rs`（先易后难，能最快出可用结果），再 USN 引擎 `usn.rs`，然后 `tree_builder.rs` 聚合，最后 `scan_drive` 命令 + 进度事件。
-3. **任务 3：前端**（可用 mock JSON 先行开发）：Treemap + 表格 + 面包屑 + 进度 + 驱动器选择。
-4. **任务 4**：错误处理、集成验证、`tauri.conf.json` 打包（NSIS/MSI，目标 <10MB）。
-
-> 详细的每文件设计、代码片段、被否决的方案（如为何弃用 jwalk / MFT / Zustand）都在 spec 文件里，接手前务必通读。
+| 决策 | 原因 |
+|---|---|
+| `merge_files=false` 时散文件保留为独立子节点 | 前端用 `N [files]` 虚拟节点统一折叠展示；曾因直接丢弃导致目录展开后空白 |
+| `prune` 返回前按 size 降序 | 保持"子节点按大小降序"的全局不变式 |
+| `scan_parallel` 一律用 scoped 本地 rayon 池 | 混用全局池会污染后续扫描（曾慢 ~60×） |
+| 快速路径按卷簇大小向上取整算"占用分配空间" | 与资源管理器一致，且零额外 syscall |
+| Tauri 2 命令级 ACL（`permissions/scan.toml` + `capabilities/default.json`） | 新增命令必须同时声明权限，否则报 `not allowed. Command not found` |
+| auto 模式 USN 优先、失败降级并行遍历 | 本机实测 USN 日志不可用时自动降级，用户无感 |
 
 ---
 
-## 6. 原始记录文件索引
+## 3. 模块说明
 
-| 文件 | 内容 |
-|------|------|
-| `feature-description.md` | 用户最初的需求文档 |
-| `.qoder/specs/USN_Fast_Disk_Scanner_9169af05.md` | 完整实施计划（含技术栈、5 个 Phase、文件结构、性能目标、被否决方案） |
-| `会话叙述.md` | 主会话对话气泡原文（用户与 Agent 的往来） |
-| `会话操作日志.md` | 183 个工具操作的完整时间线（含所有子代理动作） |
-| `接手说明-HANDOFF.md` | 本文件 |
+### 后端（src-tauri/src）
 
-原始数据来源（Qoder 缓存，只读，未改动）：
-- 会话数据库：`C:\Users\index\AppData\Roaming\Qoder\SharedClientCache\cache\db\local.db`（含 6 个会话 / 299 条消息 / 4 个任务）
-- 会话历史：`C:\Users\index\.qoder\cache\projects\tree-scan-fc5c47d\conversation-history\9169af05\9169af05.jsonl`
-- Agent 记忆：`C:\Users\index\.qoder\memories\019f941d\`（技术栈/构建/环境等结构化记忆）
+- **`scanner/parallel.rs`**：主扫描引擎。`scan_dir` 递归 + rayon 并行；错误（如目录拒绝访问）经 `ScanCtx::record_error` 收集（总数 + 上限 1000 条明细）。
+- **`scanner/prune.rs`**：树裁剪。`is_dir_child` 判定文件叶子（`file_count==1 && folder_count==0 && children.is_empty()`）；聚合 "(其他 N 项)"。
+- **`scanner/volinfo.rs`**：卷信息（可用/总空间、文件系统、簇大小），用 `GetDiskFreeSpaceExW/W` + `GetVolumeInformationW`。
+- **`scanner/usn.rs`**：USN 日志枚举（可选加速路径，环境不支持时降级）。
+- **`lib.rs`**：Tauri 命令（`scan_drive`/`get_node`/`list_drives`/`pick_folder`）+ 全树缓存 `AppState`。
+- **`api_tests.rs`**：真实数据单元测试（扫描/prune/导航/盘符枚举）+ `#[ignore]` 性能用例。
 
-> 注：数据库中 `chat_message.content`（对话正文）与 `task_tree` 为加密存储，无法直接解密；
-> 但工具执行日志 `tool_result` 为明文，本接手文档的操作还原即基于此，信息已足够完整。
+### 前端（src/）
+
+- **`components/TreeTable.tsx`**：树形列表。名称列 = 大小(固定宽度右对齐) + 名称(左对齐)；`[files]` 虚拟节点；表头排序；懒加载。
+- **`components/DriveSelector.tsx`**：三段式下拉（真实磁盘含类型/卷标、最近 5 次扫描、自定义路径原生对话框）。
+- **`components/StatusBar.tsx`**：卷信息 + 扫描错误统计（✓/✗ 点击弹窗看明细）。
+- **`App.tsx`**：状态编排；**调试面板仅在 `import.meta.env.DEV` 渲染，生产打包自动移除**。
+
+---
+
+## 4. 构建与测试
+
+```bash
+npm install
+npm run tauri dev        # 开发模式
+npm run tauri build      # 打包发行版（MSI / NSIS）
+cd src-tauri
+cargo check              # 编译检查
+cargo test               # 真实数据单元测试
+cargo test -- --ignored  # 性能压测（含真实 C: 盘全盘扫描）
+```
+
+> Windows 下 `cargo test` 依赖 `src-tauri/.cargo/config.toml` 的 runner 方案
+> （`tools/inject_manifest.cjs` 给测试 EXE 幂等注入 comctl32 v6 manifest，规避
+> TaskDialogIndirect 崩溃）。路径全部相对，项目搬迁无需改配置。
+
+发布：打 `v*` tag 触发 `.github/workflows/release.yml`（tauri-action 自动构建并发布到 GitHub Release）。
+
+---
+
+## 5. 相关文档
+
+- [`docs/API.md`](API.md) —— 前后端 IPC 契约
+- [`feature-description.md`](../feature-description.md) —— 原始需求描述
+- [`README.md`](../README.md) —— 用户视角简介

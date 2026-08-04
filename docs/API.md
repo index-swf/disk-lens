@@ -1,6 +1,6 @@
 # 前后端交互接口（IPC 契约）
 
-tree-scan 是 **Tauri 2** 应用：Rust 后端通过 Tauri IPC 暴露命令，React 前端用
+DiskLens 是 **Tauri 2** 应用：Rust 后端通过 Tauri IPC 暴露命令，React 前端用
 `@tauri-apps/api/core` 的 `invoke()` 调用，进度通过 `listen()` 订阅事件。
 
 > 所有命令参数在前端用 **camelCase** 传，Tauri 自动映射为后端的 **snake_case**。

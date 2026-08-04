@@ -8,7 +8,7 @@ interface DriveSelectorProps {
   disabled?: boolean;
 }
 
-const RECENT_KEY = "tree-scan.recent-scans";
+const RECENT_KEY = "disk-lens.recent-scans";
 const MAX_RECENT = 5;
 
 /** 读取本地保存的最近扫描路径（新的在前，最多 5 条） */
