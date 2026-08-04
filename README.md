@@ -27,7 +27,9 @@ DiskLens 是一个基于 **Tauri 2 + React 18 + Rust** 的 Windows 磁盘空间�
 
 ## 📸 截图
 
-> TODO: 添加应用界面截图（欢迎 PR）。
+![DiskLens 主界面](docs/screenshot.png)
+
+*扫描 C:\ 盘后的树形列表：左侧是目录/文件名称（大小前置，名称后置；散文件折叠进 `N [files]` 节点），右侧是占用分配空间、文件数、目录数以及占父目录百分比。*
 
 ---
 
