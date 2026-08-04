@@ -64,9 +64,13 @@ pub fn is_ntfs(path: &Path) -> bool {
 
 /// Full USN-journal scan. Returns `Err` on any failure so the caller can fall back
 /// to the parallel walker. On success the returned tree carries correct sizes
-/// (gathered by stat-ing each file via its reconstructed path). MFT reference
-/// numbers are used to rebuild the parent/child hierarchy.
-pub fn scan_usn(root: &Path, window: Option<Window>) -> Result<crate::models::TreeNode, ScannerError> {
+/// (gathered by stat-ing each file via its reconstructed path) together with the
+/// scan errors collected along the way. MFT reference numbers are used to rebuild
+/// the parent/child hierarchy.
+pub fn scan_usn(
+    root: &Path,
+    window: Option<Window>,
+) -> Result<(crate::models::TreeNode, crate::models::ScanErrors), ScannerError> {
     let drive = {
         let s = root.to_string_lossy();
         match s.find(':') {
@@ -208,7 +212,8 @@ pub fn scan_usn(root: &Path, window: Option<Window>) -> Result<crate::models::Tr
     let mut tree = build_tree(entries)
         .ok_or_else(|| ScannerError::Msg("failed to build tree from USN data".into()))?;
     tree.name = root.to_string_lossy().into_owned();
-    Ok(tree)
+    let errors = ctx.take_errors();
+    Ok((tree, errors))
 }
 
 /// Reconstruct a file's full path by walking parent FRNs up to the volume root.

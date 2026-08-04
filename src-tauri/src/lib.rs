@@ -1,23 +1,31 @@
 mod models;
 mod scanner;
 
-use models::{ScanResult, TreeNode};
+#[cfg(test)]
+mod api_tests;
+
+use models::{DriveInfo, ScanResult, TreeNode};
 use scanner::prune::TopNMode;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
+use windows::Win32::Storage::FileSystem::GetLogicalDriveStringsW;
 
 /// Process-wide cache of the most recent *full* scan tree. The on-the-wire
 /// `scan_drive` response only carries a pruned copy (to stay inside WebView
 /// memory limits); the full tree is kept here so the frontend can lazily expand
 /// any node via `get_node` without re-scanning.
+#[cfg(not(test))]
 struct AppState(Mutex<Option<TreeNode>>);
 
+#[cfg(not(test))]
 impl Default for AppState {
     fn default() -> Self {
         AppState(Mutex::new(None))
     }
 }
 
+#[cfg(not(test))]
 #[tauri::command]
 async fn scan_drive(
     window: tauri::Window,
@@ -41,6 +49,13 @@ async fn scan_drive(
     let merge_files = merge_files.unwrap_or(false);
     let precise = precise.unwrap_or(false);
 
+    // Volume-level info (free/total space, filesystem, cluster size) for the
+    // bottom status bar. Cheap Win32 calls against the volume root; computed
+    // before `drive_path` is moved into the scan closure.
+    let vol = scanner::volinfo::volume_info(Path::new(&scanner::volume_root(Path::new(
+        &drive_path,
+    ))));
+
     // Run the (blocking) file walk on a dedicated thread so we don't stall the
     // async runtime. Progress is streamed back via window events.
     let window_clone = window.clone();
@@ -58,7 +73,7 @@ async fn scan_drive(
     .await
     .map_err(|e| format!("scan task failed: {}", e))??;
 
-    let (full_tree, strategy_used) = scan_result;
+    let (full_tree, strategy_used, errors) = scan_result;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     // Cache the authoritative full tree for later `get_node` expansion, then
@@ -78,6 +93,11 @@ async fn scan_drive(
         total_files: full.file_count as u64,
         total_folders: full.folder_count as u64,
         total_size: full.size,
+        free_bytes: vol.as_ref().map(|v| v.free_bytes).unwrap_or(0),
+        total_bytes: vol.as_ref().map(|v| v.total_bytes).unwrap_or(0),
+        fs_type: vol.as_ref().map(|v| v.fs_type.clone()).unwrap_or_default(),
+        cluster_size: vol.as_ref().map(|v| v.cluster_size).unwrap_or(0),
+        errors,
     })
 }
 
@@ -100,6 +120,7 @@ fn find_child<'a>(children: &'a [TreeNode], name: &str) -> Option<&'a TreeNode> 
 /// Returns an error if no scan has been cached yet, or if a name in `path` does
 /// not match a child (the synthetic "(其他 N 项)" aggregator is intentionally not
 /// reachable this way).
+#[cfg(not(test))]
 #[tauri::command]
 async fn get_node(
     state: tauri::State<'_, AppState>,
@@ -125,8 +146,26 @@ async fn get_node(
         .as_ref()
         .ok_or_else(|| "no scan result cached; run scan_drive first".to_string())?;
 
+    // 容错：前端在 Treemap 里点到"当前层的大矩形"会触发"自我下钻"，
+    // 把当前节点名当成路径首段发过来（例如根层会发 ["C:"]）。这里把等于根名
+    // 的首段去掉，避免无意义的 "node not found"。
+    let walk: &[String] = if path.first().map_or(false, |f| f == &root.name) {
+        &path[1..]
+    } else {
+        &path
+    };
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[get_node] path={:?} (walk={:?}) max_depth={} top_n={} mode={:?}",
+            path, walk, max_depth, top_n, mode
+        );
+    }
+
     let mut current = root;
-    for name in &path {
+    let mut depth = 0usize;
+    for name in walk {
+        depth += 1;
         match find_child(current.children.as_slice(), name) {
             Some(next) => current = next,
             None => {
@@ -143,7 +182,16 @@ async fn get_node(
                 } else {
                     format!("可用子节点示例: {:?}", sample)
                 };
-                return Err(format!("node not found: {name} {hint}"));
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "[get_node] NOT FOUND segment={:?} at depth {} (full path={:?}); parent node={:?}; {}",
+                        name, depth, path, current.name, hint
+                    );
+                }
+                return Err(format!(
+                    "node not found: {name} (完整路径={path:?}; 父节点={:?}; {hint})",
+                    current.name
+                ));
             }
         }
     }
@@ -151,12 +199,95 @@ async fn get_node(
     Ok(scanner::prune::prune(current, max_depth, top_n, mode, merge_files))
 }
 
+/// Enumerate the drive letters that actually exist on this machine
+/// (`GetLogicalDriveStringsW`), each enriched with its Explorer-style drive type
+/// (`GetDriveTypeW`) and volume label (`GetVolumeInformationW`). Only present
+/// drives are returned — no hardcoded C/D/E/F/G. Extracted as a plain function
+/// so the unit tests can verify the Win32 calls against the real machine.
+pub fn enumerate_drives() -> Vec<DriveInfo> {
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
+    use windows::Win32::System::WindowsProgramming::{
+        DRIVE_CDROM, DRIVE_FIXED, DRIVE_RAMDISK, DRIVE_REMOTE, DRIVE_REMOVABLE,
+    };
+
+    fn kind_label(t: u32) -> String {
+        match t {
+            x if x == DRIVE_FIXED => "本地磁盘".into(),
+            x if x == DRIVE_REMOVABLE => "可移动磁盘".into(),
+            x if x == DRIVE_CDROM => "光驱".into(),
+            x if x == DRIVE_REMOTE => "网络驱动器".into(),
+            x if x == DRIVE_RAMDISK => "RAM 磁盘".into(),
+            _ => "未知类型".into(),
+        }
+    }
+
+    let mut buf = [0u16; 512];
+    let len = unsafe { GetLogicalDriveStringsW(Some(&mut buf)) } as usize;
+    let mut drives = Vec::new();
+    if len > 0 {
+        for part in String::from_utf16_lossy(&buf[..len]).split('\0') {
+            let root = part.trim(); // "C:\"
+            if root.is_empty() {
+                continue;
+            }
+            let letter = root.trim_end_matches('\\').to_string(); // "C:"
+            let wide = scanner::parallel::to_wide(root);
+            let root_ptr = windows::core::PCWSTR::from_raw(wide.as_ptr());
+            let kind = unsafe { kind_label(GetDriveTypeW(root_ptr)) };
+            let mut label_buf = [0u16; 64];
+            let label = unsafe {
+                if GetVolumeInformationW(root_ptr, Some(&mut label_buf), None, None, None, None)
+                    .is_ok()
+                {
+                    String::from_utf16_lossy(&label_buf)
+                        .trim_end_matches('\0')
+                        .to_string()
+                } else {
+                    String::new()
+                }
+            };
+            drives.push(DriveInfo { letter, label, kind });
+        }
+    }
+    drives
+}
+
+#[cfg(not(test))]
+#[tauri::command]
+fn list_drives() -> Vec<DriveInfo> {
+    enumerate_drives()
+}
+
+/// Open the native Windows folder-picker (IFileDialog via `rfd`) and return the
+/// chosen folder path, or `None` if the user cancelled. The Tauri window is
+/// passed as the dialog's parent so the dialog always appears on top of the app
+/// (an unparented dialog can open *behind* the window and look like "nothing
+/// happened").
+#[cfg(not(test))]
+#[tauri::command]
+fn pick_folder(window: tauri::Window) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new().set_title("选择要扫描的文件夹");
+    #[cfg(target_os = "windows")]
+    {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog
+        .pick_folder()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(not(test))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![scan_drive, get_node])
+        .invoke_handler(tauri::generate_handler![
+            scan_drive,
+            get_node,
+            list_drives,
+            pick_folder
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

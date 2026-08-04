@@ -8,6 +8,8 @@
     "core:event:default",
     "shell:allow-open",
     "allow-scan-drive",
-    "allow-get-node"
+    "allow-get-node",
+    "allow-list-drives",
+    "allow-pick-folder"
   ]
 }

@@ -18,9 +18,9 @@ export function isDrillable(node: TreeNode): boolean {
   return node.children.length > 0 || node.truncated === true;
 }
 
-/** 将字节数格式化为人类可读字符串，例如 1536 -> "1.5 KB" */
+/** 将字节数格式化为人类可读字符串，例如 1536 -> "1.5 KB"（默认保留 1 位小数） */
 export function formatBytes(bytes: number, options: FormatOptions = {}): string {
-  const { decimals = 2 } = options;
+  const { decimals = 1 } = options;
   if (bytes === 0) return "0 B";
   if (!Number.isFinite(bytes) || bytes < 0) return "-";
   const k = 1024;
@@ -40,4 +40,13 @@ export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "-";
   if (ms < 1000) return `${ms} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
+}
+
+/** 将 Unix 秒（后端 last_modified）格式化为 "YYYY-MM-DD HH:mm"；0/非法显示 "—" */
+export function formatDate(ts: number): string {
+  if (!ts || ts <= 0) return "—";
+  const d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }

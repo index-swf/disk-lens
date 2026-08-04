@@ -1,202 +1,216 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  NavItem,
   ScanMethod,
   ScanProgress as ScanProgressType,
   ScanResult,
-  TopNMode,
   TreeNode,
 } from "./types";
-import { mockTree } from "./mockData";
-import { isDrillable } from "./utils";
-import DriveSelector from "./components/DriveSelector";
+import DriveSelector, { pushRecent } from "./components/DriveSelector";
 import ScanProgress from "./components/ScanProgress";
-import Breadcrumb from "./components/Breadcrumb";
-import TreemapChart from "./components/TreemapChart";
-import DataTable from "./components/DataTable";
 import DebugPanel from "./components/DebugPanel";
+import StatusBar from "./components/StatusBar";
+import TreeTable, { type SortKey, type SortDir } from "./components/TreeTable";
 import "./App.css";
+
+/** 按 path key（"C:/Users/index"）在 root（+loaded 覆盖）中定位节点 */
+function findNode(
+  root: TreeNode,
+  loaded: Map<string, TreeNode>,
+  key: string
+): TreeNode | null {
+  const segs = key.split("/");
+  let cur: TreeNode = loaded.get(segs[0]) ?? root;
+  for (let i = 1; i < segs.length; i++) {
+    const seg = segs[i];
+    const child: TreeNode | undefined =
+      cur.children.find((c) => c.name === seg) ??
+      cur.children.find((c) => c.name.toLowerCase() === seg.toLowerCase());
+    if (!child) return null;
+    const childKey = segs.slice(0, i + 1).join("/");
+    cur = loaded.get(childKey) ?? child;
+  }
+  return cur;
+}
 
 export default function App() {
   const [drivePath, setDrivePath] = useState("C:");
   const [method, setMethod] = useState<ScanMethod>("auto");
-  const [maxDepth, setMaxDepth] = useState(4);
-  const [topN, setTopN] = useState(100);
-  const [topNMode, setTopNMode] = useState<TopNMode>("count");
-  const [mergeFiles, setMergeFiles] = useState(false);
+  // 树裁剪参数已从 UI 移除（普通用户无需理解），固定为默认值：
+  // 初始树向下展开 4 层、每层保留 Top 100、按数量截断（超出部分折叠为
+  // "(其他 N 项)" 并支持展开时懒加载）。性能调优由开发侧 CLI 完成。
   const [precise, setPrecise] = useState(false);
   const [threads, setThreads] = useState(0);
-  const [useMock, setUseMock] = useState(true);
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [navStack, setNavStack] = useState<NavItem[]>([]);
+  const [root, setRoot] = useState<TreeNode | null>(null);
+  const [rootSize, setRootSize] = useState(0);
+
+  // 树形展开状态：目录展开集合、[files] 虚拟节点展开集合、懒加载子树缓存。
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [filesExpanded, setFilesExpanded] = useState<Set<string>>(new Set());
+  const [loaded, setLoaded] = useState<Map<string, TreeNode>>(new Map());
+
   const [scanning, setScanning] = useState(false);
   const [drilling, setDrilling] = useState(false);
   const [progress, setProgress] = useState<ScanProgressType | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [sortKey, setSortKey] = useState<SortKey>("size");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
   const handleScan = useCallback(async () => {
     setScanning(true);
     setError(null);
     setScanResult(null);
-    setNavStack([]);
+    setRoot(null);
+    setRootSize(0);
     setProgress(null);
+    // 重置展开/懒加载状态
+    setExpanded(new Set());
+    setFilesExpanded(new Set());
+    setLoaded(new Map());
 
     try {
-      let result: ScanResult;
-      if (useMock) {
-        // mock 模式：复用本地完整树，包装成 ScanResult 形状（无需真实后端）
-        result = {
-          root: mockTree,
-          strategy_used: "parallel",
-          elapsed_ms: 1234,
-          total_files: mockTree.file_count,
-          total_folders: mockTree.folder_count,
-          total_size: mockTree.size,
-        };
-      } else {
-        // 真实 IPC：按新契约调用 scan_drive，后端返回裁剪树 + 统计。
-        result = await invoke<ScanResult>("scan_drive", {
-          drivePath,
-          method,
-          maxDepth,
-          topN,
-          topNMode,
-          mergeFiles,
-          precise,
-          threads: threads > 0 ? threads : null,
-        });
-      }
+      const result = await invoke<ScanResult>("scan_drive", {
+        drivePath,
+        method,
+        maxDepth: 4,
+        topN: 100,
+        topNMode: "count",
+        // 树形列表用 [files] 虚拟节点统一表达文件，因此强制不合并文件。
+        mergeFiles: false,
+        precise,
+        threads: threads > 0 ? threads : null,
+      });
       setScanResult(result);
-      setNavStack([{ node: result.root, path: [], ratio: 1 }]);
+      setRoot(result.root);
+      setRootSize(result.root.size);
+      // 默认展开根节点，便于直接查看。
+      setExpanded(new Set([result.root.name]));
+      // 记录最近扫描路径（去重、最多 5 条，本地持久化）。
+      pushRecent(drivePath);
     } catch (e) {
       setError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
       setScanning(false);
     }
-  }, [useMock, drivePath, method, maxDepth, topN]);
+  }, [drivePath, method, precise, threads]);
 
-  const handleDrill = useCallback(
-    async (node: TreeNode) => {
-      // 不可下钻（含聚合节点、纯文件叶节点）→ 直接忽略
-      if (!isDrillable(node)) return;
+  const onToggleDir = useCallback(
+    async (key: string) => {
+      const wasExpanded = expanded.has(key);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
 
-      const parent = navStack[navStack.length - 1];
-      const parentSize = parent ? parent.node.size : node.size;
-      const newPath = (parent?.path ?? []).concat(node.name);
-
-      // mock 模式下直接入栈（本地树已含全部 children）
-      // 真实模式下，若节点已带 children（后端未裁剪）也直接入栈
-      if (useMock || node.children.length > 0) {
-        setNavStack((prev) => [
-          ...prev,
-          {
-            node,
-            path: newPath,
-            ratio: parentSize > 0 ? node.size / parentSize : 0,
-          },
-        ]);
-        return;
-      }
-
-      // 否则按需从后端拉取该路径的子树（truncated 或 folder_count>0 但 children 为空）
-      setDrilling(true);
-      try {
-        const subtree = await invoke<TreeNode>("get_node", {
-          path: newPath,
-          maxDepth,
-          topN,
-          topNMode,
-          mergeFiles,
-        });
-        setNavStack((prev) => [
-          ...prev,
-          {
-            node: subtree,
-            path: newPath,
-            ratio: parentSize > 0 ? subtree.size / parentSize : 0,
-          },
-        ]);
-      } catch (e) {
-        setError(typeof e === "string" ? e : JSON.stringify(e));
-      } finally {
-        setDrilling(false);
+      // 展开一个被后端裁剪（truncated）的目录时，懒加载其子树。
+      if (!wasExpanded) {
+        const node = findNode(root as TreeNode, loaded, key);
+        if (node && node.truncated && !loaded.has(key)) {
+          setDrilling(true);
+          try {
+            const path = key.split("/"); // ["C:","Users",...]；后端会剥掉首段根名
+            const subtree = await invoke<TreeNode>("get_node", {
+              path,
+              maxDepth: 4,
+              topN: 100,
+              topNMode: "count",
+              mergeFiles: false,
+            });
+            setLoaded((prev) => {
+              const next = new Map(prev);
+              next.set(key, subtree);
+              return next;
+            });
+            if (import.meta.env.DEV) {
+              console.log("[get_node] loaded", key, "children=", subtree.children.length);
+            }
+          } catch (e) {
+            setError(typeof e === "string" ? e : JSON.stringify(e));
+          } finally {
+            setDrilling(false);
+          }
+        }
       }
     },
-    [navStack, useMock, maxDepth, topN]
+    [expanded, loaded, root]
   );
 
-  const handleNavigate = useCallback((index: number) => {
-    setNavStack((prev) => prev.slice(0, index + 1));
+  const onToggleFiles = useCallback((key: string) => {
+    setFilesExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }, []);
+
+  const onSort = useCallback((key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  }, [sortKey]);
 
   const handleProgress = useCallback((p: ScanProgressType) => {
     setProgress(p);
   }, []);
 
-  const currentItem = navStack[navStack.length - 1];
-  const currentNode = currentItem?.node ?? null;
-  const rows = currentNode?.children ?? [];
-  const parentSize = currentNode?.size ?? 0;
-
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title">USN 极速磁盘扫描器</h1>
+        <h1 className="app-title">DiskLens</h1>
         <DriveSelector value={drivePath} onChange={setDrivePath} disabled={scanning} />
         <button className="scan-btn" onClick={handleScan} disabled={scanning}>
           {scanning ? "扫描中…" : "开始扫描"}
         </button>
       </header>
 
-      <DebugPanel
-        method={method}
-        onMethodChange={setMethod}
-        maxDepth={maxDepth}
-        onMaxDepthChange={setMaxDepth}
-        topN={topN}
-        onTopNChange={setTopN}
-        topNMode={topNMode}
-        onTopNModeChange={setTopNMode}
-        mergeFiles={mergeFiles}
-        onMergeFilesChange={setMergeFiles}
-        precise={precise}
-        onPreciseChange={setPrecise}
-        threads={threads}
-        onThreadsChange={setThreads}
-        useMock={useMock}
-        onUseMockChange={setUseMock}
-        result={scanResult}
-        scanning={scanning}
-      />
+      {/* 调试面板仅在开发环境显示，release 打包自动隐藏 */}
+      {import.meta.env.DEV && (
+        <DebugPanel
+          method={method}
+          onMethodChange={setMethod}
+          precise={precise}
+          onPreciseChange={setPrecise}
+          threads={threads}
+          onThreadsChange={setThreads}
+          result={scanResult}
+          scanning={scanning}
+        />
+      )}
 
       <ScanProgress scanning={scanning} progress={progress} onProgress={handleProgress} />
 
-      {drilling && (
-        <div className="app-drilling">正在加载子目录…</div>
-      )}
-
+      {drilling && <div className="app-drilling">正在加载子目录…</div>}
       {error && <div className="app-error">出错：{error}</div>}
 
-      {currentNode && (
-        <Breadcrumb navStack={navStack} onNavigate={handleNavigate} />
+      {root ? (
+        <main className="app-main-single">
+          <TreeTable
+            root={root}
+            rootSize={rootSize}
+            expanded={expanded}
+            filesExpanded={filesExpanded}
+            loaded={loaded}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onToggleDir={onToggleDir}
+            onToggleFiles={onToggleFiles}
+            onSort={onSort}
+          />
+        </main>
+      ) : (
+        <div className="app-empty">选择一个驱动器并点击「开始扫描」</div>
       )}
 
-      <main className="app-main">
-        <section className="panel panel-left">
-          <div className="panel-head">目录明细</div>
-          <DataTable rows={rows} parentSize={parentSize} onRowClick={handleDrill} />
-        </section>
-        <section className="panel panel-right">
-          <div className="panel-head">
-            空间分布（Treemap）{currentNode ? `— ${currentNode.name}` : ""}
-          </div>
-          <div className="panel-body">
-            <TreemapChart currentNode={currentNode} onDrill={handleDrill} />
-          </div>
-        </section>
-      </main>
+      <StatusBar result={scanResult} />
     </div>
   );
 }

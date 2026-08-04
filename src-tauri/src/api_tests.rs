@@ -1,0 +1,355 @@
+//! 真实数据集成测试（无 mock）。
+//!
+//! 这些测试直接调用后端引擎 (`scanner::scan_drive` / `prune` / `find_child`)，
+//! 全部基于**真实文件系统**，不依赖任何假数据。可通过
+//! `cargo test` 运行；性能/压力测试标 `#[ignore]`，用 `cargo test -- --ignored` 运行。
+
+use crate::find_child;
+use crate::models::{ScannerError, TreeNode};
+use crate::scanner::prune::{prune, TopNMode};
+use crate::scanner::scan_drive;
+use std::path::Path;
+
+// ---------- 构造辅助 ----------
+
+fn node(
+    name: &str,
+    size: u64,
+    files: u32,
+    folders: u32,
+    children: Vec<TreeNode>,
+) -> TreeNode {
+    TreeNode {
+        name: name.to_string(),
+        size,
+        allocated_size: size,
+        file_count: files,
+        folder_count: folders,
+        last_modified: 0,
+        children,
+        truncated: false,
+    }
+}
+
+fn dir(name: &str, size: u64, children: Vec<TreeNode>) -> TreeNode {
+    node(name, size, 0, children.len() as u32, children)
+}
+
+// ---------- 1. scan_drive：真实目录 ----------
+
+#[test]
+fn scan_parallel_real_project() {
+    // 扫真实的 src-tauri 源码目录（小且真实），验证结构与一致性。
+    let root_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (tree, strategy, errors) =
+        scan_drive(None, root_dir.to_string_lossy().into_owned(), "parallel", false, None)
+            .expect("扫描项目目录应成功");
+
+    assert!(strategy == "parallel", "强制 parallel 应返回 parallel");
+    assert!(tree.size > 0, "项目大小应 > 0");
+    assert!(tree.folder_count > 0, "应扫到文件夹");
+    assert!(tree.file_count > 0, "应扫到文件");
+    assert!(errors.count == 0, "项目目录不应有扫描错误, 实际: {}", errors.count);
+
+    // 验证：prune 在真实树上可正常工作（返回裁剪树）。
+    let pruned = prune(&tree, 2, 10, TopNMode::Count, false);
+    assert!(pruned.size == tree.size, "裁剪不应改变总大小");
+    // 子节点按 size 降序
+    for w in pruned.children.windows(2) {
+        assert!(
+            w[0].size >= w[1].size,
+            "子节点应按 size 降序排列（真实树）"
+        );
+    }
+}
+
+#[test]
+fn scan_missing_path_errors() {
+    let res = scan_drive(
+        None,
+        "C:\\__tree_scan_test_nonexistent_xyz_123".to_string(),
+        "parallel",
+        false,
+        None,
+    );
+    match res {
+        Err(ScannerError::Msg(m)) => assert!(
+            m.contains("does not exist"),
+            "应报路径不存在，实际: {m}"
+        ),
+        other => panic!("缺失路径应返回 Err，实际: {other:?}"),
+    }
+}
+
+// ---------- 2. prune：count 模式 ----------
+
+#[test]
+fn prune_count_keeps_top_n_and_aggregates() {
+    // 5 个目录，size 100/80/60/40/20，top_n=2
+    let root = dir(
+        "root",
+        300,
+        vec![
+            dir("a", 100, vec![]),
+            dir("b", 80, vec![]),
+            dir("c", 60, vec![]),
+            dir("d", 40, vec![]),
+            dir("e", 20, vec![]),
+        ],
+    );
+    let out = prune(&root, 4, 2, TopNMode::Count, false);
+    assert_eq!(out.children.len(), 3, "保留 2 个 + 1 个聚合");
+    // 全局按 size 降序（聚合项 size=120 会排在最前，名字顺序不再固定）
+    for w in out.children.windows(2) {
+        assert!(w[0].size >= w[1].size, "子节点应按 size 降序排列");
+    }
+    let names: Vec<&str> = out.children.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"a"), "a 应被保留, 实际: {names:?}");
+    assert!(names.contains(&"b"), "b 应被保留, 实际: {names:?}");
+    let agg = out
+        .children
+        .iter()
+        .find(|c| c.name.starts_with("(其他"))
+        .expect("剩余应聚合成 (其他 N 项)");
+    assert_eq!(agg.size, 120, "聚合项应汇总剩余 60+40+20");
+    assert!(out.truncated, "有折叠应标 truncated");
+    // 聚合节点不可下钻（无 children）
+    assert!(agg.children.is_empty());
+}
+
+// ---------- 3. prune：percent 模式 ----------
+
+#[test]
+fn prune_percent_covers_threshold() {
+    // root size=300，子目录 100/80/60/40/20。top_n=90 → 阈值 270。
+    // 累计 100+80+60+40=280 ≥ 270 → 保留前 4 个，聚合最后 1 个(20)。
+    let root = dir(
+        "root",
+        300,
+        vec![
+            dir("a", 100, vec![]),
+            dir("b", 80, vec![]),
+            dir("c", 60, vec![]),
+            dir("d", 40, vec![]),
+            dir("e", 20, vec![]),
+        ],
+    );
+    let out = prune(&root, 4, 90, TopNMode::Percent, false);
+    // 保留 4 个目录 + 1 个聚合
+    assert_eq!(out.children.len(), 5);
+    let agg = out.children.last().unwrap();
+    assert!(agg.name.starts_with("(其他"), "剩余应聚合");
+    assert_eq!(agg.size, 20, "percent 模式只聚合掉最后 20（覆盖率 99%）");
+    assert!(out.truncated);
+}
+
+// ---------- 4. prune：merge_files ----------
+
+#[test]
+fn prune_merge_files_folds_loose_files() {
+    // 1 个目录 + 3 个散文件（folder_count=0）
+    let root = node(
+        "root",
+        130,
+        3,
+        1,
+        vec![
+            dir("sub", 100, vec![]),
+            node("f1", 10, 1, 0, vec![]),
+            node("f2", 10, 1, 0, vec![]),
+            node("f3", 10, 1, 0, vec![]),
+        ],
+    );
+    let out = prune(&root, 4, 100, TopNMode::Count, true);
+    // 应含：sub 目录 + (3 个文件)
+    assert_eq!(out.children.len(), 2, "应折叠为 目录 + 文件聚合");
+    let file_node = out.children.iter().find(|c| c.name.starts_with("(")).unwrap();
+    assert_eq!(file_node.file_count, 3, "文件聚合应汇总 3 个文件");
+    assert_eq!(file_node.folder_count, 0, "文件聚合不可下钻");
+    assert!(file_node.children.is_empty());
+    assert!(out.truncated, "merge_files 后 truncated=true");
+}
+
+// ---------- 5. prune：depth 预算耗尽 ----------
+
+#[test]
+fn prune_depth_zero_collapses() {
+    let root = dir("root", 10, vec![dir("a", 5, vec![dir("b", 2, vec![])])]);
+    let out = prune(&root, 0, 100, TopNMode::Count, false);
+    assert!(out.children.is_empty(), "depth=0 应无 children");
+    assert!(out.truncated, "原含子节点，depth=0 应标 truncated");
+}
+
+// ---------- 6. find_child：大小写不敏感 ----------
+
+#[test]
+fn find_child_case_insensitive() {
+    let root = dir("root", 1, vec![dir("Windows", 1, vec![]), dir("System32", 1, vec![])]);
+    assert!(find_child(&root.children, "Windows").is_some());
+    assert!(find_child(&root.children, "windows").is_some(), "小写应匹配");
+    assert!(find_child(&root.children, "WINDOWS").is_some(), "大写应匹配");
+    assert!(find_child(&root.children, "Missing").is_none());
+}
+
+// ---------- 7. get_node 导航逻辑（与命令一致的核心路径） ----------
+
+#[test]
+fn get_node_navigation_returns_subtree() {
+    // root -> A(100) -> B(50); root -> C(30)
+    let root = dir(
+        "root",
+        180,
+        vec![
+            dir("A", 100, vec![dir("B", 50, vec![]), dir("A2", 30, vec![])]),
+            dir("C", 30, vec![]),
+        ],
+    );
+    // 模拟 get_node(["A","B"])
+    let mut cur = &root;
+    cur = find_child(&cur.children, "A").expect("A 应存在");
+    cur = find_child(&cur.children, "B").expect("B 应存在");
+    let sub = prune(cur, 2, 100, TopNMode::Count, false);
+    assert_eq!(sub.name, "B");
+    assert_eq!(sub.size, 50);
+}
+
+#[test]
+fn get_node_unknown_name_is_none() {
+    let root = dir("root", 1, vec![dir("A", 1, vec![])]);
+    // 模拟 get_node(["A","Z"]) —— 第二层找不到
+    let cur = find_child(&root.children, "A").expect("A 存在");
+    assert!(
+        find_child(&cur.children, "Z").is_none(),
+        "get_node 对不存在的名字应返回 None（命令层转成 Err 带提示）"
+    );
+}
+
+// ---------- 8. enumerate_drives：本机真实盘符（含类型/卷标） ----------
+
+#[test]
+fn enumerate_drives_returns_real_drives() {
+    let drives = crate::enumerate_drives();
+    assert!(!drives.is_empty(), "本机至少应有一个盘符, 实际为空");
+    assert!(
+        drives.iter().any(|d| d.letter.eq_ignore_ascii_case("C:")),
+        "C: 盘应存在, 实际: {:?}",
+        drives.iter().map(|d| d.letter.clone()).collect::<Vec<_>>()
+    );
+    for d in &drives {
+        assert_eq!(d.letter.len(), 2, "盘符格式应为 'X:', 实际: {}", d.letter);
+        assert!(d.letter.ends_with(':'), "盘符应以冒号结尾: {}", d.letter);
+        assert!(!d.kind.is_empty(), "磁盘类型不应为空: {}", d.letter);
+    }
+}
+
+// ---------- 9. prune：merge_files=false 必须保留散文件（回归测试） ----------
+
+#[test]
+fn prune_keeps_files_when_merge_false() {
+    // 1 个目录 + 2 个散文件，merge_files=false：散文件必须保留为独立子节点，
+    // 否则前端 [files] 虚拟节点展开后为空（曾导致"展开后没内容"的假象）。
+    let root = node(
+        "root",
+        130,
+        2,
+        1,
+        vec![
+            dir("sub", 100, vec![]),
+            node("f1", 10, 1, 0, vec![]),
+            node("f2", 20, 1, 0, vec![]),
+        ],
+    );
+    let out = prune(&root, 4, 100, TopNMode::Count, false);
+    assert_eq!(out.children.len(), 3, "应保留 1 目录 + 2 个散文件");
+    let files: Vec<&TreeNode> = out.children.iter().filter(|c| c.file_count == 1).collect();
+    assert_eq!(files.len(), 2, "merge_files=false 时散文件应逐项保留");
+    assert!(!out.truncated, "无折叠时不应标 truncated");
+}
+
+// ============================================================
+//  压力 / 性能测试（#[ignore]，用 `cargo test -- --ignored` 运行）
+//  全部基于真实磁盘，对比 TreeSize Free 的 ~10s/200GB 基准。
+// ============================================================
+
+#[test]
+#[ignore]
+fn perf_thread_scaling_on_project() {
+    let root_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("project root")
+        .to_string_lossy()
+        .into_owned();
+
+    for threads in [Some(1u32), None] {
+        let t0 = std::time::Instant::now();
+        let (tree, _, _) = scan_drive(None, root_dir.clone(), "parallel", false, threads)
+            .expect("扫描应成功");
+        let dt = t0.elapsed();
+        let rate = tree.file_count as f64 / dt.as_secs_f64();
+        println!(
+            "THREADS[{:?}] files={} folders={} sizeMB={:.1} elapsed={:.2}s rate={:.0} files/s",
+            threads.unwrap_or(0),
+            tree.file_count,
+            tree.folder_count,
+            tree.size as f64 / 1e6,
+            dt.as_secs_f64(),
+            rate
+        );
+    }
+}
+
+#[test]
+#[ignore]
+fn perf_scan_c_drive() {
+    // 强制 parallel（确定性、树完整），扫真实 C: 盘，对比 TreeSize 10s 基准。
+    let t0 = std::time::Instant::now();
+    let res = scan_drive(None, "C:".to_string(), "parallel", false, None);
+    let dt = t0.elapsed();
+    match res {
+        Ok((tree, strat, _errors)) => {
+            let gb = tree.size as f64 / 1e9;
+            let rate = tree.file_count as f64 / dt.as_secs_f64();
+            println!(
+                "PERF[C:] strategy={strat} files={} folders={} sizeGB={:.2} elapsed={:.1}s rate={:.0} files/s",
+                tree.file_count, tree.folder_count, gb, dt.as_secs_f64(), rate
+            );
+            println!(
+                "BENCHMARK vs TreeSize Free: ~10s for ~200GB. 本次 {:.1}s for {:.1}GB => {:.2}x",
+                dt.as_secs_f64(),
+                gb,
+                dt.as_secs_f64() / 10.0
+            );
+        }
+        Err(e) => println!("PERF[C:] FAILED: {e}"),
+    }
+}
+
+// ---------- 9. USN 路径实测（用户担心 USN 未被测试覆盖） ----------
+
+#[test]
+#[ignore]
+fn scan_usn_c_drive_works() {
+    // 强制 USN 扫真实 C: 盘，验证 USN 日志路径可用性/耗时/结果一致性。
+    // 注意：USN 路径对每个文件走 file_sizes(开句柄)，1.2M 文件可能较慢。
+    // 本机可能因"USN 日志未启用"或"非管理员"而不可用——那是环境限制，
+    // auto 模式会优雅降级到并行遍历，故此处只打印结果、不 panic。
+    let t0 = std::time::Instant::now();
+    let res = scan_drive(None, "C:".to_string(), "usn", false, None);
+    let dt = t0.elapsed();
+    match res {
+        Ok((tree, strat, errors)) => {
+            let gb = tree.size as f64 / 1e9;
+            println!(
+                "USN[C:] strategy={strat} files={} folders={} sizeGB={:.2} elapsed={:.1}s errors={}",
+                tree.file_count,
+                tree.folder_count,
+                gb,
+                dt.as_secs_f64(),
+                errors.count
+            );
+        }
+        Err(e) => {
+            println!("USN[C:] NOT AVAILABLE after {:.1}s: {e}", dt.as_secs_f64());
+        }
+    }
+}

@@ -14,6 +14,12 @@ pub struct TreeNode {
     pub allocated_size: u64,
     pub file_count: u32,
     pub folder_count: u32,
+    /// Last modification time, Unix seconds (UTC). 0 when not available.
+    /// Populated by the scanner from `fs::Metadata::modified()`; the frontend
+    /// renders it in the "最后修改日期" column. `#[serde(default)]` keeps the
+    /// field optional on the wire so older serialized payloads still parse.
+    #[serde(default)]
+    pub last_modified: i64,
     // NOTE: children must ALWAYS be serialized (even when empty) — the frontend
     // accesses `node.children.length` / `.map` directly. Omitting the field on
     // leaf nodes would throw at runtime (a second white-screen cause). The tree
@@ -21,6 +27,30 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
     #[serde(default)]
     pub truncated: bool,
+}
+
+/// Errors encountered while scanning (e.g. access-denied directories). The walker
+/// keeps a full *count* and a capped list of message *samples* so the frontend
+/// can show "N errors" plus a detailed log without blowing up IPC payload size.
+#[derive(Serialize, Clone, Default, Debug)]
+pub struct ScanErrors {
+    /// Total number of errors encountered during the scan.
+    pub count: u64,
+    /// Up to `ERROR_LOG_CAP` (see `scanner/mod.rs`) detail messages, oldest first.
+    pub samples: Vec<String>,
+}
+
+/// One logical drive present on the machine, for the drive-picker dropdown.
+/// `letter` is what the scanner accepts (e.g. "C:"); `kind`/`label` are shown to
+/// the user Explorer-style ("本地磁盘", "System", ...).
+#[derive(Serialize, Clone, Debug)]
+pub struct DriveInfo {
+    /// Drive letter with colon, e.g. "C:".
+    pub letter: String,
+    /// Volume label; empty when the volume has none / the call failed.
+    pub label: String,
+    /// Human-readable drive type: 本地磁盘 / 可移动磁盘 / 光驱 / 网络驱动器 / RAM 磁盘 / 未知类型.
+    pub kind: String,
 }
 
 /// Result returned by `scan_drive`. The `root` is a *pruned* copy of the full
@@ -39,6 +69,16 @@ pub struct ScanResult {
     pub total_files: u64,
     pub total_folders: u64,
     pub total_size: u64,
+    /// Volume free space (bytes) reported by `GetDiskFreeSpaceExW`; 0 when unavailable.
+    pub free_bytes: u64,
+    /// Volume total capacity (bytes); 0 when unavailable.
+    pub total_bytes: u64,
+    /// Filesystem name, e.g. "NTFS"; empty when unavailable.
+    pub fs_type: String,
+    /// Bytes per cluster for the volume (e.g. 4096 on typical NTFS); 0 when unknown.
+    pub cluster_size: u32,
+    /// Errors produced during the scan (access denied etc.).
+    pub errors: ScanErrors,
 }
 
 /// Payload emitted on the `scan-progress` event. Field names are part of the IPC

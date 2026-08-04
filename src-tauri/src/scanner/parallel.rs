@@ -1,5 +1,5 @@
-use crate::models::{ScannerError, TreeNode};
-use crate::scanner::ScanCtx;
+use crate::models::{ScanErrors, ScannerError, TreeNode};
+use crate::scanner::{volinfo, ScanCtx};
 use rayon::prelude::*;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -68,6 +68,16 @@ pub(crate) fn file_sizes(path: &Path) -> (u64, u64) {
     }
 }
 
+/// Return `meta.modified()` as Unix seconds (UTC), or 0 when unavailable.
+/// Cheap: the caller already holds the `fs::Metadata`, so no extra syscall.
+fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Recursively scan a directory and return its aggregated `TreeNode`.
 /// `is_root` keeps the drive root from being treated as a skippable entry.
 /// `precise` controls whether each file's *allocated* (on-disk, cluster-rounded)
@@ -83,7 +93,11 @@ pub(crate) fn file_sizes(path: &Path) -> (u64, u64) {
 fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<TreeNode> {
     let read_dir = match std::fs::read_dir(path) {
         Ok(r) => r,
-        Err(_) => return None, // no permission / inaccessible -> skip
+        Err(e) => {
+            // 无权限 / 无法访问 -> 记录错误并继续扫描其余目录。
+            ctx.record_error(format!("无法读取目录: {} ({e})", path.display()));
+            return None;
+        }
     };
 
     let mut file_children: Vec<TreeNode> = Vec::new();
@@ -100,7 +114,10 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
         let p = entry.path();
         let meta = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(e) => {
+                ctx.record_error(format!("无法读取文件元数据: {} ({e})", p.display()));
+                continue;
+            }
         };
         // Never follow symlinks / junctions: prevents loops and double counting.
         if meta.file_type().is_symlink() {
@@ -113,11 +130,20 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
                 file_sizes(&p)
             } else {
                 // Logical size is already available from the directory entry —
-                // reuse it for both `size` and `allocated_size` (no separate
-                // handle open). Allocated size is only an approximation in this
-                // mode (no cluster rounding) but the speed gain is large.
+                // reuse it for `size` and round it up to the volume's cluster
+                // size for `allocated_size` (no separate handle open). This makes
+                // the "占用分配空间" column real (>= logical size, e.g. small
+                // files claim a whole 4K cluster) without the per-file syscall
+                // cost of `precise` mode. When the cluster size is unknown
+                // (e.g. network share) we fall back to reporting the raw size.
                 let len = meta.len();
-                (len, len)
+                let al = if ctx.cluster > 0 && len > 0 {
+                    let c = ctx.cluster as u64;
+                    ((len + c - 1) / c) * c
+                } else {
+                    len
+                };
+                (len, al)
             };
             dir_size += sz;
             dir_alloc += al;
@@ -132,6 +158,7 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
                 allocated_size: al,
                 file_count: 1,
                 folder_count: 0,
+                last_modified: mtime_secs(&meta),
                 children: vec![],
                 truncated: false,
             });
@@ -179,6 +206,13 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
         allocated_size: allocated,
         file_count,
         folder_count: folder_count_total,
+        // `meta` above is a *child* entry's metadata; the directory's own mtime
+        // must be read from `path` itself (one extra stat per directory — cheap
+        // next to the `read_dir` we already pay).
+        last_modified: std::fs::metadata(path)
+            .ok()
+            .map(|m| mtime_secs(&m))
+            .unwrap_or(0),
         children,
         truncated: false,
     })
@@ -188,27 +222,36 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
 ///
 /// * `precise` — when false, skips the per-file handle open and reports logical
 ///   size as the allocated size (much faster; see `scan_dir`).
-/// * `threads` — optional override for the Rayon worker count. `None` lets Rayon
-///   use all logical CPUs (the default and usually the fastest). A custom count is
-///   built as a *local* pool and installed around the walk so repeated scans don't
-///   fight over the global Rayon pool.
+/// * `threads` — optional override for the Rayon worker count. `None` uses all
+///   logical CPUs. **Both branches build a *local* thread pool and run the walk
+///   inside `pool.install`** rather than falling back to Rayon's process-global
+///   pool. This is deliberate: mixing a scoped local pool with the global pool in
+///   one process (e.g. a `Some(1)` scan followed by a `None` scan) poisons the
+///   global pool and can slow a subsequent parallel walk by ~60×. Scoped pools
+///   sidestep that entirely and keep repeated scans deterministic.
 pub fn scan_parallel(
     root: &Path,
     window: Option<Window>,
     precise: bool,
     threads: Option<u32>,
-) -> Result<TreeNode, ScannerError> {
-    let ctx = ScanCtx::new(window);
+) -> Result<(TreeNode, ScanErrors), ScannerError> {
+    let mut ctx = ScanCtx::new(window);
+    // One cheap Win32 query for the volume cluster geometry; used by the fast
+    // path to round file sizes up to whole clusters for the allocated column.
+    ctx.cluster = volinfo::cluster_size(root);
     let walker = || scan_dir(root, &ctx, true, precise);
-    let tree = match threads {
-        Some(n) if n > 0 => {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(n as usize)
-                .build()
-                .map_err(|e| ScannerError::Msg(format!("failed to build thread pool: {e}")))?;
-            pool.install(walker)
-        }
-        _ => walker(),
+    let n = match threads {
+        Some(n) if n > 0 => n as usize,
+        _ => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4),
     };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build()
+        .map_err(|e| ScannerError::Msg(format!("failed to build thread pool: {e}")))?;
+    let tree = pool.install(walker);
+    let errors = ctx.take_errors();
     tree.ok_or_else(|| ScannerError::Msg(format!("failed to scan {}", root.display())))
+        .map(|t| (t, errors))
 }

@@ -61,34 +61,136 @@ body {
   cursor: not-allowed;
 }
 
-.mock-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: #cfd8ec;
-  cursor: pointer;
-}
-
-/* ---------- 驱动器选择 ---------- */
+/* ---------- 扫描目标选择（三段式下拉） ---------- */
 .drive-selector {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  position: relative;
   font-size: 0.9rem;
   color: #e6ebf5;
 }
-.drive-selector select,
-.drive-custom-input {
-  padding: 0.4em 0.6em;
+.drive-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.4em 0.8em;
   border-radius: 6px;
   border: 1px solid #3a4a6b;
   background: #2b3858;
   color: #fff;
   font-size: 0.9rem;
+  cursor: pointer;
+  max-width: 320px;
 }
-.drive-custom-input {
-  width: 180px;
+.drive-btn:hover:not(:disabled) {
+  background: #33456b;
+}
+.drive-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.drive-btn-icon {
+  flex: none;
+}
+.drive-btn-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drive-btn-caret {
+  flex: none;
+  font-size: 0.7rem;
+  color: #9fb0d0;
+}
+.drive-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  min-width: 240px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #1f2a44;
+  border: 1px solid #3a4a6b;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+}
+.drive-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+.drive-menu-section + .drive-menu-section {
+  border-top: 1px solid #33456b;
+}
+.drive-menu-title {
+  font-size: 0.72rem;
+  color: #8fa3c8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.drive-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: #e6ebf5;
+  font-size: 0.88rem;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drive-menu-item:hover:not(:disabled) {
+  background: #33456b;
+}
+.drive-menu-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.drive-menu-empty {
+  font-size: 0.82rem;
+  color: #7d8db0;
+  padding: 4px 8px;
+}
+.drive-menu-error {
+  color: #ff9d9d;
+  word-break: break-all;
+  white-space: normal;
+}
+.drive-menu-custom {
+  color: #8fc0ff;
+  font-weight: 600;
+}
+/* 磁盘条目：盘符加粗 + 类型/卷标弱化（资源管理器风格） */
+.drive-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.drive-item-letter {
+  flex: none;
+  font-weight: 700;
+  color: #fff;
+}
+.drive-item-kind {
+  flex: none;
+  color: #8fa3c8;
+  font-size: 0.82rem;
+}
+.drive-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: #b9c6e0;
+  font-size: 0.82rem;
 }
 
 /* ---------- 扫描进度 ---------- */
@@ -373,4 +475,290 @@ body {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+
+/* ---------- 单一树形列表（替代原左右分栏） ---------- */
+.app-main-single {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+}
+.app-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9aa7c2;
+  font-size: 1rem;
+}
+.tree-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e2e8f4;
+  border-radius: 10px;
+}
+.tree-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.tree-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f7f9fe;
+  border-bottom: 2px solid #e2e8f4;
+  padding: 8px 10px;
+  text-align: right;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  z-index: 2;
+}
+.tree-table thead th.col-name {
+  text-align: left;
+  min-width: 320px;
+}
+.tree-table thead th .th-sort {
+  margin-left: 4px;
+  color: #9aa7c2;
+  font-size: 0.72rem;
+}
+.tree-table thead th:hover {
+  background: #eef2fb;
+}
+.tree-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f3fa;
+  vertical-align: middle;
+}
+.tree-table tbody tr:hover {
+  background: #eef4ff;
+}
+.tree-table .col-name {
+  text-align: left;
+  position: relative;
+}
+.name-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  overflow: hidden;
+}
+/* 名称列背景占比条：相对整盘根总大小 */
+.name-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(79, 140, 255, 0.18);
+  z-index: 0;
+  pointer-events: none;
+}
+.twisty {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: 0.7rem;
+  color: #4f8cff;
+  cursor: pointer;
+  user-select: none;
+  z-index: 1;
+}
+.twisty-off {
+  cursor: default;
+  color: transparent;
+}
+.node-icon {
+  flex: none;
+  z-index: 1;
+}
+/* 名称列内联大小：固定最小宽度 + 右对齐，不足宽度时左侧留白，保证纵向对齐 */
+.node-size {
+  flex: none;
+  min-width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #5a6b8c;
+  font-size: 0.8rem;
+  z-index: 1;
+}
+.row-dir .node-size {
+  color: #3a4a6b;
+}
+.node-name {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  z-index: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.row-dir .node-name {
+  font-weight: 600;
+  color: #1f2a44;
+}
+.row-file .node-name {
+  color: #33405c;
+}
+.row-files .node-name {
+  color: #5a6b8c;
+  font-style: italic;
+}
+.row-aggregate .node-name {
+  color: #9aa7c2;
+  font-style: italic;
+}
+
+/* 占父目录 % 列：文字 + 背景进度条 */
+.col-pct {
+  min-width: 90px;
+}
+.pct-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 22px;
+  overflow: hidden;
+}
+.pct-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(38, 166, 91, 0.16);
+  z-index: 0;
+  pointer-events: none;
+}
+.pct-text {
+  position: relative;
+  z-index: 1;
+  padding: 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 底部状态条 ---------- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 6px 16px;
+  background: #1f2a44;
+  color: #cfd8ec;
+  font-size: 0.82rem;
+  border-top: 1px solid #2c3a5c;
+}
+.status-item b {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.status-dim {
+  color: #7d8db0;
+}
+.status-err-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+}
+.status-err-ok {
+  background: #2e8b57;
+  cursor: default;
+}
+.status-err-bad {
+  background: #c62828;
+}
+.status-err-bad:hover {
+  background: #b71c1c;
+}
+.status-err-btn:disabled {
+  opacity: 1;
+}
+
+/* ---------- 错误日志弹窗 ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  width: min(680px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.35);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #f7f9fe;
+  border-bottom: 1px solid #e2e8f4;
+}
+.modal-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: #1f2a44;
+}
+.modal-close {
+  border: none;
+  background: none;
+  font-size: 1rem;
+  color: #6b7891;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.modal-close:hover {
+  background: #e2e8f4;
+  color: #1f2a44;
+}
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+}
+.modal-empty {
+  margin: 0;
+  padding: 16px;
+  color: #8a96b3;
+  font-size: 0.88rem;
+}
+.modal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.modal-item {
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  color: #b00020;
+  font-family: Consolas, "Courier New", monospace;
+  word-break: break-all;
+  border-bottom: 1px solid #f5f7fc;
+}
+.modal-more {
+  color: #8a96b3;
+  font-family: inherit;
+}
+
 

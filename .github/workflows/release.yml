@@ -1,0 +1,58 @@
+name: Release
+
+# 触发方式：
+#   1. 推送形如 v0.1.0 的 git tag（推荐，正式发版）
+#   2. 手动触发（仓库 Actions 页面 -> Run workflow）
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # tauri build 会：npm run build（前端）-> cargo build --release（后端）-> 打 MSI + NSIS 安装包。
+      # tauri-action 自动把产物上传到 GitHub Release。
+      - name: Build & publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "DiskLens ${{ github.ref_name }}"
+          releaseBody: |
+            ## DiskLens ${{ github.ref_name }}
+
+            Windows 磁盘占用分析器。从下方附件下载安装包：
+
+            - **`.msi`** — Windows 安装程序（推荐）
+            - **`.exe`** — NSIS 安装程序
+
+            > 运行环境：Windows 10/11 + WebView2 Runtime（Win11 自带，Win10 一般已随系统更新安装）。
+          releaseDraft: true
+          prerelease: false

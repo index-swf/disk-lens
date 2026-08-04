@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    usn_scanner_lib::run()
+    disk_lens_lib::run()
 }

@@ -1,7 +1,7 @@
 use crate::models::TreeNode;
 
 /// How `top_n` is interpreted when pruning a node's children.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopNMode {
     /// Keep the `top_n` largest children; collapse the rest.
     Count,
@@ -33,6 +33,7 @@ fn aggregate_others(rest: &[&TreeNode]) -> TreeNode {
         allocated_size,
         file_count,
         folder_count,
+        last_modified: 0,
         children: Vec::new(),
         truncated: true,
     }
@@ -56,15 +57,25 @@ fn file_aggregate(files: &[&TreeNode]) -> TreeNode {
         allocated_size,
         file_count,
         folder_count: 0,
+        last_modified: 0,
         children: Vec::new(),
         truncated: true,
     }
 }
 
-/// True for a child that represents a directory (has sub-folders or nested
-/// children), as opposed to a plain file leaf.
+/// True for a child that represents a directory, as opposed to a plain file leaf.
+///
+/// In the aggregated tree (`tree_builder.rs`) a *directory* node always carries
+/// its immediate children — both sub-folders and loose files — in `children`,
+/// and reports `folder_count` >= the number of nested sub-folders. A *file* leaf,
+/// by contrast, is the only node that has exactly one file (itself,
+/// `file_count == 1`), no sub-folders, and no child nodes. The only ambiguous
+/// case is an empty folder, which we also treat as a directory (`file_count ==
+/// 0`). Classifying by negating the proven-file signature is exact for this
+/// model: a real directory never has `file_count == 1 && folder_count == 0 &&
+/// children.is_empty()` (its files live in `children`).
 fn is_dir_child(c: &TreeNode) -> bool {
-    c.folder_count > 0 || !c.children.is_empty()
+    !(c.file_count == 1 && c.folder_count == 0 && c.children.is_empty())
 }
 
 /// Produce a size-bounded copy of `node` for IPC transport.
@@ -83,7 +94,10 @@ fn is_dir_child(c: &TreeNode) -> bool {
 ///   4. aggregate the remaining directory-children into a synthetic
 ///      "(其他 N 项)" node,
 ///   5. when `merge_files` is set, fold all file-children into one
-///      "(N 个文件)" node instead of listing them individually.
+///      "(N 个文件)" node; **when it is not set, the file-children are kept as
+///      individual child nodes** (the frontend groups them under a `[files]`
+///      virtual node). Never drop them silently — that made directories with
+///      only loose files appear empty after expanding.
 ///
 /// A node is reported as `truncated` when its children were not all individually
 /// present in the output — either because the depth budget ran out, some
@@ -104,6 +118,7 @@ pub fn prune(
             allocated_size: node.allocated_size,
             file_count: node.file_count,
             folder_count: node.folder_count,
+            last_modified: node.last_modified,
             children: Vec::new(),
             truncated,
         };
@@ -160,7 +175,16 @@ pub fn prune(
     }
     if merge_files && !files.is_empty() {
         out.push(file_aggregate(&files));
+    } else {
+        // merge_files=false：散文件必须保留为独立子节点（前端统一折叠进
+        // [files] 虚拟节点）。之前这里直接丢弃，导致只含散文件的目录
+        // 展开后一片空白（"扫描不是全量的"假象）。
+        for f in &files {
+            out.push((*f).clone());
+        }
     }
+    // 保持"子节点按 size 降序"的全局不变式（文件混入后也统一排序）。
+    out.sort_by(|a, b| b.size.cmp(&a.size));
 
     let truncated = !rest_dirs.is_empty() || (merge_files && !files.is_empty());
     TreeNode {
@@ -169,6 +193,7 @@ pub fn prune(
         allocated_size: node.allocated_size,
         file_count: node.file_count,
         folder_count: node.folder_count,
+        last_modified: node.last_modified,
         children: out,
         truncated,
     }

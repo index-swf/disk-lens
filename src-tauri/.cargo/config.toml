@@ -1,0 +1,19 @@
+# Cargo configuration for the usn-scanner (Tauri) package.
+#
+# Windows only: `cargo test` / `cargo bench` build a lib-unittest executable
+# that is NOT a Tauri binary, so it gets no Common-Controls-v6 activation
+# manifest from tauri_build. Without it, the test EXE crashes at load with
+# STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) when a transitive dependency
+# (tauri / winit / windows-rs) references TaskDialogIndirect.
+#
+# The `runner` below executes every test/bench binary through a small Node
+# script that injects the comctl32 v6 manifest (src-tauri/comctl32_v6.manifest)
+# into the EXE via `mt.exe` before running it. The injection is idempotent and
+# survives `cargo clean`, so no manual `mt.exe` step is required.
+#
+# NOTE: the runner path is relative to this crate's directory (src-tauri), so
+# the project can be moved/restored anywhere without editing this file. The
+# manifest itself is located by the script via __dirname, also relative.
+
+[target.'cfg(windows)']
+runner = ["node", "tools/inject_manifest.cjs"]

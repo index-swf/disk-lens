@@ -12,3 +12,13 @@ commands.allow = ["scan_drive"]
 identifier = "allow-get-node"
 description = "Allow the frontend to invoke the get_node command"
 commands.allow = ["get_node"]
+
+[[permission]]
+identifier = "allow-list-drives"
+description = "Allow the frontend to invoke the list_drives command"
+commands.allow = ["list_drives"]
+
+[[permission]]
+identifier = "allow-pick-folder"
+description = "Allow the frontend to invoke the pick_folder command"
+commands.allow = ["pick_folder"]

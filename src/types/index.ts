@@ -13,6 +13,8 @@ export interface TreeNode {
   allocated_size: number;
   file_count: number;
   folder_count: number;
+  /** 最后修改时间，Unix 秒（UTC）；0 表示未知 */
+  last_modified: number;
   children: TreeNode[];
   /**
    * 该节点是否为"被后端裁剪"的节点：
@@ -29,7 +31,23 @@ export interface ScanProgress {
   current_dir: string;
 }
 
-/** scan_drive 命令的返回结构（裁剪树 + 扫描统计） */
+/** 扫描过程中收集的错误(如目录拒绝访问)。count 为总数,samples 为截断的明细 */
+export interface ScanErrors {
+  count: number;
+  samples: string[];
+}
+
+/** 本机一个逻辑磁盘（对应后端 DriveInfo；list_drives 返回） */
+export interface DriveInfo {
+  /** 盘符，如 "C:" */
+  letter: string;
+  /** 卷标，可能为空 */
+  label: string;
+  /** 磁盘类型：本地磁盘 / 可移动磁盘 / 光驱 / 网络驱动器 / RAM 磁盘 / 未知类型 */
+  kind: string;
+}
+
+/** scan_drive 命令的返回结构（裁剪树 + 扫描统计 + 卷信息 + 错误日志） */
 export interface ScanResult {
   root: TreeNode;
   strategy_used: "usn" | "parallel";
@@ -37,6 +55,16 @@ export interface ScanResult {
   total_files: number;
   total_folders: number;
   total_size: number;
+  /** 卷可用空间（字节） */
+  free_bytes: number;
+  /** 卷总容量（字节） */
+  total_bytes: number;
+  /** 文件系统名，如 "NTFS" */
+  fs_type: string;
+  /** 每簇字节数（如 4096）；0 = 未知 */
+  cluster_size: number;
+  /** 扫描错误（访问拒绝等） */
+  errors: ScanErrors;
 }
 
 /** 导航栈中的一项：节点 + 从根到该节点的 name 路径（根为 []）+ 在父级中的大小占比 */

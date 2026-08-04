@@ -109,6 +109,7 @@ pub fn build_tree(entries: Vec<FlatEntry>) -> Option<TreeNode> {
                 allocated_size: alloc,
                 file_count: fc,
                 folder_count: dc,
+                last_modified: 0,
                 children: child_nodes,
                 truncated: false,
             },
