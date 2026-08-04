@@ -37,35 +37,33 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # tauri build 会：npm run build（前端）-> cargo build --release（后端）。
-      # 当前阶段 --no-bundle：跳过 MSI/NSIS 安装包（国内拉 WiX 易超时），只产绿色版 exe。
-      # 以后要恢复安装包：删掉下面 `args: --no-bundle` 这一行即可。
-      - name: Build & create release
-        uses: tauri-apps/tauri-action@v0
+      # 仅构建 release 二进制（--no-bundle：跳过 MSI/NSIS 打包，规避国内 WiX
+      # 下载超时；前端 dist 仍会嵌入 exe）。以后要恢复安装包：去掉 --no-bundle，
+      # 并把下方上传步骤换成 tauri-apps/tauri-action。
+      - name: Build release (portable exe only)
+        run: npm run tauri build -- --no-bundle
+
+      # 手工创建 draft release 并上传绿色版 exe（tauri-action 强制要求 bundle
+      # 产物，--no-bundle 下会报 "No artifacts were found"，故不用它）。
+      # 推 tag 时用 tag 名；手工触发时用 manual-<run_number>，不污染 tag 列表。
+      - name: Create draft release & upload portable exe
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # 推 tag 时用 tag 名；手工触发时用 manual-<run_number>，避免污染 tag 列表
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_number) }}
-          releaseName: DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}
-          releaseBody: |
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES: |
             ## DiskLens
 
-            Windows 磁盘占用分析器。从下方附件下载**绿色版可执行文件**（免安装，双击即用）：
+            Windows 磁盘占用分析器。附件为**绿色版可执行文件**（免安装，双击即用）：
 
             - **`disk-lens.exe`** — 绿色版单文件（Windows 10/11 + WebView2 Runtime，Win11 自带）
 
             > 当前为测试构建，仅发布绿色版 exe；正式版将同时提供 MSI/NSIS 安装包。
-          releaseDraft: true
-          prerelease: false
-          args: --no-bundle
-
-      # 绿色版 exe 在 bundle 之外，tauri-action 不会自动上传，这里手动补传。
-      - name: Upload portable exe to release
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_number) }}"
-          gh release upload "$TAG" src-tauri/target/release/disk-lens.exe --clobber
-          echo "uploaded disk-lens.exe to release $TAG"
+          TITLE="DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}"
+          gh release create "$TAG" \
+            src-tauri/target/release/disk-lens.exe \
+            --title "$TITLE" \
+            --notes "$RELEASE_NOTES" \
+            --draft
+          echo "created release $TAG with disk-lens.exe"
