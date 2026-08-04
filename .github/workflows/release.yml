@@ -50,13 +50,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NOTES: |
-            ## DiskLens
+            ## DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}
 
             Windows 磁盘占用分析器。附件为**绿色版可执行文件**（免安装，双击即用）：
 
             - **`disk-lens.exe`** — 绿色版单文件（Windows 10/11 + WebView2 Runtime，Win11 自带）
-
-            > 当前为测试构建，仅发布绿色版 exe；正式版将同时提供 MSI/NSIS 安装包。
         shell: bash
         run: |
           TAG="${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_number) }}"
