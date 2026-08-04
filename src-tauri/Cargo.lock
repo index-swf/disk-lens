@@ -786,6 +786,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "disk-lens"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+ "thiserror 2.0.19",
+ "tokio",
+ "windows 0.58.0",
+]
+
+[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4233,22 +4249,6 @@ dependencies = [
  "serde",
  "unic-ucd-ident",
  "url",
-]
-
-[[package]]
-name = "disk-lens"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "rfd",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
- "thiserror 2.0.19",
- "tokio",
- "windows 0.58.0",
 ]
 
 [[package]]
