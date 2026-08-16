@@ -109,6 +109,33 @@ pub(crate) fn volume_root(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Decode the octal escapes `/proc/mounts` uses for special characters in mount
+/// points / devices (space = `\040`, tab = `\011`, backslash = `\134`, ...).
+/// Without this a USB stick labeled "UBUNTU 24_0" comes back as the bogus path
+/// `UBUNTU\04024_0`, which does not exist on disk. Any other byte is kept as-is.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn unescape_mount_field(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' && i + 3 < b.len() {
+            let (d1, d2, d3) = (b[i + 1], b[i + 2], b[i + 3]);
+            if (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+                && (b'0'..=b'7').contains(&d3)
+            {
+                out.push((d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0'));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Top-level scan entry point.
 ///
 /// The USN-journal path was removed (never validated in production); every

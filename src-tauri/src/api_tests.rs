@@ -261,6 +261,48 @@ fn enumerate_drives_returns_real_drives() {
     }
 }
 
+/// /proc/mounts 会把空格/tab/反斜杠转义成八进制（\040 等），必须解码成真实路径，
+/// 否则带空格的 U 盘挂载点（如 "UBUNTU 24_0"）会变成不存在的 "UBUNTU\04024_0"。
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn unescape_mount_field_decodes_octal_escapes() {
+    use crate::scanner::unescape_mount_field;
+    assert_eq!(
+        unescape_mount_field("/media/caoyy/UBUNTU\\04024_0"),
+        "/media/caoyy/UBUNTU 24_0"
+    );
+    assert_eq!(unescape_mount_field("a\\011b"), "a\tb");
+    assert_eq!(unescape_mount_field("back\\134slash"), "back\\slash");
+    assert_eq!(unescape_mount_field("plain"), "plain");
+    assert_eq!(unescape_mount_field("\\040"), " ");
+}
+
+/// Linux 枚举结果不应包含对用户无意义的挂载点：/boot/efi、fuse（FreeRDP 剪贴板）、
+/// snap 镜像、以及任何未解码的 \040 转义残留。
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn enumerate_drives_unix_filters_noise_and_unescapes() {
+    let drives = crate::enumerate_drives();
+    assert!(
+        !drives.iter().any(|d| d.letter == "/boot/efi"),
+        "不应出现 /boot/efi: {:?}",
+        drives.iter().map(|d| d.letter.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        !drives.iter().any(|d| d.letter.starts_with("/tmp/") || d.kind.starts_with("fuse")),
+        "不应出现 /tmp/ 或 fuse 挂载: {:?}",
+        drives.iter().map(|d| format!("{} ({})", d.letter, d.kind)).collect::<Vec<_>>()
+    );
+    // 无八进制转义残留（真实路径不应包含反斜杠八进制序列）
+    for d in &drives {
+        assert!(
+            !d.letter.contains("\\040") && !d.letter.contains('\\'),
+            "挂载点不应含未解码的转义: {}",
+            d.letter
+        );
+    }
+}
+
 // ---------- 9. prune：merge_files=false 必须保留散文件（回归测试） ----------
 
 #[test]

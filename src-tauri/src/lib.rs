@@ -301,29 +301,39 @@ fn enumerate_drives_unix() -> Vec<DriveInfo> {
         for line in content.lines() {
             let mut it = line.split_whitespace();
             let dev = it.next().unwrap_or("");
-            let mp = it.next().unwrap_or("");
+            let mp_raw = it.next().unwrap_or("");
             let fstype = it.next().unwrap_or("");
+            // /proc/mounts escapes spaces/tabs/backslashes as octal (`\040` etc.),
+            // so a USB labeled "UBUNTU 24_0" reads as "UBUNTU\04024_0". Decode so
+            // the returned path is the real on-disk path.
+            let dev = crate::scanner::unescape_mount_field(dev);
+            let mp = crate::scanner::unescape_mount_field(mp_raw);
             // Keep only real disks: block devices (/dev/sda*, /dev/nvme*,
             // /dev/mmcblk*) plus network shares (cifs/nfs). Everything else
-            // (proc, sysfs, tmpfs, overlay, squashfs, fuse clipboards, loop
-            // snap images, ...) is not a user disk and is skipped.
+            // (proc, sysfs, tmpfs, overlay, fuse clipboards, loop snap images,
+            // ...) is not a user disk and is skipped.
             let real_dev = dev.starts_with("/dev/")
                 || matches!(fstype, "cifs" | "nfs" | "nfs4");
             if !real_dev || !mp.starts_with('/') {
                 continue;
             }
-            // Skip loop-mounted snap images (squashfs) and optical/image media.
+            // Skip things that are not user disks:
+            // - loop-mounted snap images (squashfs) and optical/image media
+            // - fuse mounts (FreeRDP clipboard, sshfs, ...)
+            // - the EFI system partition (/boot/efi) — no user data
             if matches!(fstype, "squashfs" | "iso9660" | "udf")
+                || fstype.starts_with("fuse")
+                || mp == "/boot/efi"
                 || mp.starts_with("/snap")
                 || mp.starts_with("/var/lib/snapd")
             {
                 continue;
             }
-            if !seen.insert(mp.to_string()) {
+            if !seen.insert(mp.clone()) {
                 continue;
             }
             drives.push(DriveInfo {
-                letter: mp.to_string(),
+                letter: mp,
                 label: String::new(),
                 kind: if fstype.is_empty() {
                     "本地磁盘".to_string()

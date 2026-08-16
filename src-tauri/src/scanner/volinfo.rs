@@ -130,9 +130,11 @@ fn read_fs_type(path: &Path) -> String {
         for line in content.lines() {
             let mut it = line.split_whitespace();
             let _dev = it.next();
-            let mp = it.next().unwrap_or("");
+            // /proc/mounts escapes spaces etc. as octal (\040); decode so the
+            // prefix match works for mount points with spaces (e.g. USB labels).
+            let mp = crate::scanner::unescape_mount_field(it.next().unwrap_or(""));
             let fstype = it.next().unwrap_or("");
-            if p.starts_with(mp) && best.as_ref().map_or(true, |b| mp.len() > b.0) {
+            if p.starts_with(&mp) && best.as_ref().map_or(true, |b| mp.len() > b.0) {
                 best = Some((mp.len(), fstype.to_string()));
             }
         }
