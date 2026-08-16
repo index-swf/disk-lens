@@ -93,6 +93,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # gh release create 需要 git 仓库上下文来解析 remote（否则报
+      # "fatal: not a git repository"）；publish job 没有 build 的 checkout，
+      # 所以这里单独 checkout 一次（轻量）。
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download Windows portable binary
         uses: actions/download-artifact@v4
         with:
