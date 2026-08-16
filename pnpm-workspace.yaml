@@ -1,8 +1,9 @@
-# pnpm 11 设置（setting home 从 package.json 的 "pnpm" 字段迁移至此）
-# 允许 esbuild 的 postinstall 构建脚本（vite 依赖其平台二进制）
-onlyBuiltDependencies:
-  - esbuild
+# pnpm 11 设置（pnpm 11 起：onlyBuiltDependencies/neverBuiltDependencies 等
+# 旧字段已移除，改用 allowBuilds 映射；strictDepBuilds 默认 true，未审核的
+# 构建脚本会让 pnpm install 以非零退出）
+allowBuilds:
+  esbuild: true
 
-# 跳过 run/exec 前的依赖状态检查（esbuild 的 ignored-builds 状态会导致
-# 内部 install 死循环；其二进制由 optionalDependencies 提供，无需 postinstall）
+# 跳过 run/exec 前的依赖状态检查（esbuild 的二进制由 optionalDependencies
+# 提供，无需 postinstall；此键避免 pnpm run 每次先做内部 install 检查）
 verifyDepsBeforeRun: false
