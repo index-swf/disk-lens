@@ -1,5 +1,7 @@
-# ===== 依赖 (npm) =====
+# ===== 依赖 (pnpm) =====
 node_modules/
+# 已切换到 pnpm（提交 pnpm-lock.yaml），npm lock 不再需要
+package-lock.json
 
 # ===== 构建 / 编译产物 =====
 # Vite 前端打包输出
