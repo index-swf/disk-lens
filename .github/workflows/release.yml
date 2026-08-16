@@ -29,14 +29,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # pnpm 必须先于 setup-node 安装：setup-node 的 cache: pnpm 需要
+      # 调用 pnpm 来定位 store 缓存，顺序反了会报 "Unable to locate pnpm"。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -68,7 +72,7 @@ jobs:
       # 前端 dist 仍会嵌入二进制）。以后要恢复 MSI/NSIS/AppImage：去掉 --no-bundle，
       # 并把上传步骤换成 tauri-apps/tauri-action。
       - name: Build release (portable binary)
-        run: npm run tauri build -- --no-bundle
+        run: pnpm tauri build -- --no-bundle
 
       - name: Upload portable binary artifact
         uses: actions/upload-artifact@v4
