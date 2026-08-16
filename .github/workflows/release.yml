@@ -66,7 +66,11 @@ jobs:
             librsvg2-dev
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        # 不用 --frozen-lockfile：pnpm 11 在 frozen 模式下只认 lockfile settings
+        # 里的 onlyBuiltDependencies，读不到 pnpm-workspace.yaml 的批准记录，
+        # 会误报 esbuild ignored-builds 并以非零退出（本地非 frozen 正常）。
+        # lockfile 仍提交，版本锁定不变；build 批准走 workspace 配置。
+        run: pnpm install
 
       # 仅构建 release 二进制（--no-bundle：跳过安装包，产出绿色版可执行文件；
       # 前端 dist 仍会嵌入二进制）。以后要恢复 MSI/NSIS/AppImage：去掉 --no-bundle，
