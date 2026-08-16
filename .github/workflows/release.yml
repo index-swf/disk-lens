@@ -31,10 +31,10 @@ jobs:
 
       # pnpm 必须先于 setup-node 安装：setup-node 的 cache: pnpm 需要
       # 调用 pnpm 来定位 store 缓存，顺序反了会报 "Unable to locate pnpm"。
+      # 版本不在此指定——pnpm/action-setup v4 会自动读取 package.json 的
+      # packageManager 字段（同时指定 version 会报 "Multiple versions"）。
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
