@@ -76,7 +76,10 @@ jobs:
       # 前端 dist 仍会嵌入二进制）。以后要恢复 MSI/NSIS/AppImage：去掉 --no-bundle，
       # 并把上传步骤换成 tauri-apps/tauri-action。
       - name: Build release (portable binary)
-        run: pnpm tauri build -- --no-bundle
+        # 注意不要写 `pnpm tauri build -- --no-bundle`：pnpm 会把 -- 后的
+        # 参数原样透传，tauri CLI 再转发给 cargo build，导致
+        # "unexpected argument '--no-bundle'"。--no-bundle 是 tauri 顶层标志。
+        run: pnpm tauri build --no-bundle
 
       - name: Upload portable binary artifact
         uses: actions/upload-artifact@v4
