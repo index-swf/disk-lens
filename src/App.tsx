@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { homeDir } from "@tauri-apps/api/path";
 import type {
   ScanProgress as ScanProgressType,
   ScanResult,
@@ -34,6 +35,25 @@ function findNode(
 
 export default function App() {
   const [drivePath, setDrivePath] = useState("C:");
+
+  // Linux 下默认扫描目标改为主目录（Windows 保持 C:）。
+  // 平台判断用 navigator.platform（WebKitGTK 报 Linux，WebView2 报 Win32）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (/linux/i.test(navigator.platform || "")) {
+          const home = await homeDir();
+          if (!cancelled) setDrivePath(home);
+        }
+      } catch {
+        /* 非 Tauri 环境（纯浏览器调试）忽略 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // 树裁剪参数已从 UI 移除（普通用户无需理解），固定为默认值：
   // 初始树向下展开 4 层、每层保留 Top 100、按数量截断（超出部分折叠为
   // "(其他 N 项)" 并支持展开时懒加载）。性能调优由开发侧 CLI 完成。

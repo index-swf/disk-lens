@@ -285,10 +285,20 @@ fn enumerate_drives_unix() -> Vec<DriveInfo> {
             let dev = it.next().unwrap_or("");
             let mp = it.next().unwrap_or("");
             let fstype = it.next().unwrap_or("");
-            // Keep only device-backed mounts (dev is an absolute path like
-            // /dev/sda2). Pseudo filesystems (proc, sysfs, tmpfs, overlay,
-            // squashfs, ...) report a name instead and are skipped.
-            if dev.is_empty() || !dev.starts_with('/') || !mp.starts_with('/') {
+            // Keep only real disks: block devices (/dev/sda*, /dev/nvme*,
+            // /dev/mmcblk*) plus network shares (cifs/nfs). Everything else
+            // (proc, sysfs, tmpfs, overlay, squashfs, fuse clipboards, loop
+            // snap images, ...) is not a user disk and is skipped.
+            let real_dev = dev.starts_with("/dev/")
+                || matches!(fstype, "cifs" | "nfs" | "nfs4");
+            if !real_dev || !mp.starts_with('/') {
+                continue;
+            }
+            // Skip loop-mounted snap images (squashfs) and optical/image media.
+            if matches!(fstype, "squashfs" | "iso9660" | "udf")
+                || mp.starts_with("/snap")
+                || mp.starts_with("/var/lib/snapd")
+            {
                 continue;
             }
             if !seen.insert(mp.to_string()) {

@@ -126,6 +126,16 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
         }
     };
 
+    // Filesystem id of this directory (Unix). A *submount* — e.g. an SMB/NFS
+    // share or another disk mounted inside the scanned tree — reports a
+    // different `dev`, so we skip descending into it. This keeps a "scan my
+    // home" run from walking every network drive mounted under it.
+    #[cfg(unix)]
+    let parent_dev = std::fs::metadata(path).ok().map(|m| {
+        use std::os::unix::fs::MetadataExt;
+        m.dev()
+    });
+
     let mut file_children: Vec<TreeNode> = Vec::new();
     let mut dir_paths: Vec<PathBuf> = Vec::new();
     let mut dir_size = 0u64;
@@ -150,6 +160,17 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
             continue;
         }
         if meta.is_dir() {
+            // 子目录是跨文件系统的挂载点（如挂在 home 下的 SMB 网络盘）时不
+            // 递归进入，避免跨设备慢速扫描。
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if let Some(pd) = parent_dev {
+                    if meta.dev() != pd {
+                        continue;
+                    }
+                }
+            }
             dir_paths.push(p);
         } else {
             let (sz, al) = if precise {

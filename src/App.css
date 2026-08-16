@@ -70,6 +70,7 @@ body {
 .drive-btn {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
   padding: 0.4em 0.8em;
   border-radius: 6px;
@@ -78,7 +79,8 @@ body {
   color: #fff;
   font-size: 0.9rem;
   cursor: pointer;
-  max-width: 320px;
+  /* 加宽以容纳较长的 Linux 挂载点/主目录路径，超长省略号 */
+  width: min(380px, 44vw);
 }
 .drive-btn:hover:not(:disabled) {
   background: #33456b;
@@ -91,9 +93,12 @@ body {
   flex: none;
 }
 .drive-btn-label {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
 }
 .drive-btn-caret {
   flex: none;
