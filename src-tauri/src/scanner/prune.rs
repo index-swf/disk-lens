@@ -65,11 +65,12 @@ fn file_aggregate(files: &[&TreeNode]) -> TreeNode {
 
 /// True for a child that represents a directory, as opposed to a plain file leaf.
 ///
-/// In the aggregated tree (`tree_builder.rs`) a *directory* node always carries
-/// its immediate children — both sub-folders and loose files — in `children`,
-/// and reports `folder_count` >= the number of nested sub-folders. A *file* leaf,
-/// by contrast, is the only node that has exactly one file (itself,
-/// `file_count == 1`), no sub-folders, and no child nodes. The only ambiguous
+/// In the aggregated tree (built by `scanner/parallel.rs`) a *directory* node
+/// always carries its immediate children — both sub-folders and loose files — in
+/// `children`, and reports `folder_count` >= the number of nested sub-folders.
+/// A *file* leaf, by contrast, is the only node that has exactly one file
+/// (itself, `file_count == 1`), no sub-folders, and no child nodes. The only
+/// ambiguous
 /// case is an empty folder, which we also treat as a directory (`file_count ==
 /// 0`). Classifying by negating the proven-file signature is exact for this
 /// model: a real directory never has `file_count == 1 && folder_count == 0 &&

@@ -65,13 +65,12 @@ fn scan_parallel_real_project() {
 
 #[test]
 fn scan_missing_path_errors() {
-    let res = scan_drive(
-        None,
-        "C:\\__tree_scan_test_nonexistent_xyz_123".to_string(),
-        "parallel",
-        false,
-        None,
-    );
+    let missing = if cfg!(target_os = "windows") {
+        "C:\\__tree_scan_test_nonexistent_xyz_123".to_string()
+    } else {
+        "/__tree_scan_test_nonexistent_xyz_123".to_string()
+    };
+    let res = scan_drive(None, missing, "parallel", false, None);
     match res {
         Err(ScannerError::Msg(m)) => assert!(
             m.contains("does not exist"),
@@ -224,21 +223,34 @@ fn get_node_unknown_name_is_none() {
     );
 }
 
-// ---------- 8. enumerate_drives：本机真实盘符（含类型/卷标） ----------
+// ---------- 8. enumerate_drives：本机真实盘符/挂载点 ----------
 
 #[test]
 fn enumerate_drives_returns_real_drives() {
     let drives = crate::enumerate_drives();
-    assert!(!drives.is_empty(), "本机至少应有一个盘符, 实际为空");
-    assert!(
-        drives.iter().any(|d| d.letter.eq_ignore_ascii_case("C:")),
-        "C: 盘应存在, 实际: {:?}",
-        drives.iter().map(|d| d.letter.clone()).collect::<Vec<_>>()
-    );
-    for d in &drives {
-        assert_eq!(d.letter.len(), 2, "盘符格式应为 'X:', 实际: {}", d.letter);
-        assert!(d.letter.ends_with(':'), "盘符应以冒号结尾: {}", d.letter);
-        assert!(!d.kind.is_empty(), "磁盘类型不应为空: {}", d.letter);
+    assert!(!drives.is_empty(), "本机至少应有一个盘符/挂载点, 实际为空");
+    if cfg!(target_os = "windows") {
+        assert!(
+            drives.iter().any(|d| d.letter.eq_ignore_ascii_case("C:")),
+            "C: 盘应存在, 实际: {:?}",
+            drives.iter().map(|d| d.letter.clone()).collect::<Vec<_>>()
+        );
+        for d in &drives {
+            assert_eq!(d.letter.len(), 2, "盘符格式应为 'X:', 实际: {}", d.letter);
+            assert!(d.letter.ends_with(':'), "盘符应以冒号结尾: {}", d.letter);
+            assert!(!d.kind.is_empty(), "磁盘类型不应为空: {}", d.letter);
+        }
+    } else {
+        // Linux: 至少应枚举到根挂载点 "/"
+        assert!(
+            drives.iter().any(|d| d.letter == "/"),
+            "根挂载点 / 应存在, 实际: {:?}",
+            drives.iter().map(|d| d.letter.clone()).collect::<Vec<_>>()
+        );
+        for d in &drives {
+            assert!(d.letter.starts_with('/'), "挂载点应以 / 开头: {}", d.letter);
+            assert!(!d.kind.is_empty(), "文件系统类型不应为空: {}", d.letter);
+        }
     }
 }
 
@@ -301,16 +313,22 @@ fn perf_thread_scaling_on_project() {
 #[test]
 #[ignore]
 fn perf_scan_c_drive() {
-    // 强制 parallel（确定性、树完整），扫真实 C: 盘，对比 TreeSize 10s 基准。
+    // 强制 parallel（确定性、树完整），扫真实根卷，对比 TreeSize 10s 基准。
+    // Windows 扫 C:，Linux 扫 /。
+    let target = if cfg!(target_os = "windows") {
+        "C:".to_string()
+    } else {
+        "/".to_string()
+    };
     let t0 = std::time::Instant::now();
-    let res = scan_drive(None, "C:".to_string(), "parallel", false, None);
+    let res = scan_drive(None, target, "parallel", false, None);
     let dt = t0.elapsed();
     match res {
         Ok((tree, strat, _errors)) => {
             let gb = tree.size as f64 / 1e9;
             let rate = tree.file_count as f64 / dt.as_secs_f64();
             println!(
-                "PERF[C:] strategy={strat} files={} folders={} sizeGB={:.2} elapsed={:.1}s rate={:.0} files/s",
+                "PERF[root] strategy={strat} files={} folders={} sizeGB={:.2} elapsed={:.1}s rate={:.0} files/s",
                 tree.file_count, tree.folder_count, gb, dt.as_secs_f64(), rate
             );
             println!(
@@ -320,36 +338,6 @@ fn perf_scan_c_drive() {
                 dt.as_secs_f64() / 10.0
             );
         }
-        Err(e) => println!("PERF[C:] FAILED: {e}"),
-    }
-}
-
-// ---------- 9. USN 路径实测（用户担心 USN 未被测试覆盖） ----------
-
-#[test]
-#[ignore]
-fn scan_usn_c_drive_works() {
-    // 强制 USN 扫真实 C: 盘，验证 USN 日志路径可用性/耗时/结果一致性。
-    // 注意：USN 路径对每个文件走 file_sizes(开句柄)，1.2M 文件可能较慢。
-    // 本机可能因"USN 日志未启用"或"非管理员"而不可用——那是环境限制，
-    // auto 模式会优雅降级到并行遍历，故此处只打印结果、不 panic。
-    let t0 = std::time::Instant::now();
-    let res = scan_drive(None, "C:".to_string(), "usn", false, None);
-    let dt = t0.elapsed();
-    match res {
-        Ok((tree, strat, errors)) => {
-            let gb = tree.size as f64 / 1e9;
-            println!(
-                "USN[C:] strategy={strat} files={} folders={} sizeGB={:.2} elapsed={:.1}s errors={}",
-                tree.file_count,
-                tree.folder_count,
-                gb,
-                dt.as_secs_f64(),
-                errors.count
-            );
-        }
-        Err(e) => {
-            println!("USN[C:] NOT AVAILABLE after {:.1}s: {e}", dt.as_secs_f64());
-        }
+        Err(e) => println!("PERF[root] FAILED: {e}"),
     }
 }

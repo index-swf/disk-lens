@@ -1,7 +1,6 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  ScanMethod,
   ScanProgress as ScanProgressType,
   ScanResult,
   TreeNode,
@@ -35,7 +34,6 @@ function findNode(
 
 export default function App() {
   const [drivePath, setDrivePath] = useState("C:");
-  const [method, setMethod] = useState<ScanMethod>("auto");
   // 树裁剪参数已从 UI 移除（普通用户无需理解），固定为默认值：
   // 初始树向下展开 4 层、每层保留 Top 100、按数量截断（超出部分折叠为
   // "(其他 N 项)" 并支持展开时懒加载）。性能调优由开发侧 CLI 完成。
@@ -74,7 +72,6 @@ export default function App() {
     try {
       const result = await invoke<ScanResult>("scan_drive", {
         drivePath,
-        method,
         maxDepth: 4,
         topN: 100,
         topNMode: "count",
@@ -95,7 +92,7 @@ export default function App() {
     } finally {
       setScanning(false);
     }
-  }, [drivePath, method, precise, threads]);
+  }, [drivePath, precise, threads]);
 
   const onToggleDir = useCallback(
     async (key: string) => {
@@ -175,8 +172,6 @@ export default function App() {
       {/* 调试面板仅在开发环境显示，release 打包自动隐藏 */}
       {import.meta.env.DEV && (
         <DebugPanel
-          method={method}
-          onMethodChange={setMethod}
           precise={precise}
           onPreciseChange={setPrecise}
           threads={threads}

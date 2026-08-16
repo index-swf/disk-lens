@@ -9,7 +9,6 @@ use scanner::prune::TopNMode;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
-use windows::Win32::Storage::FileSystem::GetLogicalDriveStringsW;
 
 /// Process-wide cache of the most recent *full* scan tree. The on-the-wire
 /// `scan_drive` response only carries a pruned copy (to stay inside WebView
@@ -199,13 +198,35 @@ async fn get_node(
     Ok(scanner::prune::prune(current, max_depth, top_n, mode, merge_files))
 }
 
-/// Enumerate the drive letters that actually exist on this machine
-/// (`GetLogicalDriveStringsW`), each enriched with its Explorer-style drive type
-/// (`GetDriveTypeW`) and volume label (`GetVolumeInformationW`). Only present
-/// drives are returned — no hardcoded C/D/E/F/G. Extracted as a plain function
-/// so the unit tests can verify the Win32 calls against the real machine.
+/// Enumerate the drives / mount points that actually exist on this machine.
+///
+/// Windows: drive letters (`GetLogicalDriveStringsW`), each enriched with its
+/// Explorer-style drive type (`GetDriveTypeW`) and volume label
+/// (`GetVolumeInformationW`). Only present drives are returned — no hardcoded
+/// C/D/E/F/G.
+///
+/// Linux: device-backed mount points parsed from `/proc/mounts` (pseudo
+/// filesystems like proc/sysfs/tmpfs are skipped), each tagged with its
+/// filesystem type. `letter` carries the mount point path (e.g. "/", "/home").
+///
+/// Extracted as a plain function so the unit tests can verify against the real
+/// machine.
 pub fn enumerate_drives() -> Vec<DriveInfo> {
-    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
+    #[cfg(target_os = "windows")]
+    {
+        enumerate_drives_windows()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        enumerate_drives_unix()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn enumerate_drives_windows() -> Vec<DriveInfo> {
+    use windows::Win32::Storage::FileSystem::{
+        GetDriveTypeW, GetLogicalDriveStringsW, GetVolumeInformationW,
+    };
     use windows::Win32::System::WindowsProgramming::{
         DRIVE_CDROM, DRIVE_FIXED, DRIVE_RAMDISK, DRIVE_REMOTE, DRIVE_REMOVABLE,
     };
@@ -252,6 +273,49 @@ pub fn enumerate_drives() -> Vec<DriveInfo> {
     drives
 }
 
+#[cfg(not(target_os = "windows"))]
+fn enumerate_drives_unix() -> Vec<DriveInfo> {
+    use std::collections::HashSet;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut drives = Vec::new();
+    if let Ok(content) = std::fs::read_to_string("/proc/mounts") {
+        for line in content.lines() {
+            let mut it = line.split_whitespace();
+            let dev = it.next().unwrap_or("");
+            let mp = it.next().unwrap_or("");
+            let fstype = it.next().unwrap_or("");
+            // Keep only device-backed mounts (dev is an absolute path like
+            // /dev/sda2). Pseudo filesystems (proc, sysfs, tmpfs, overlay,
+            // squashfs, ...) report a name instead and are skipped.
+            if dev.is_empty() || !dev.starts_with('/') || !mp.starts_with('/') {
+                continue;
+            }
+            if !seen.insert(mp.to_string()) {
+                continue;
+            }
+            drives.push(DriveInfo {
+                letter: mp.to_string(),
+                label: String::new(),
+                kind: if fstype.is_empty() {
+                    "本地磁盘".to_string()
+                } else {
+                    fstype.to_string()
+                },
+            });
+        }
+    }
+    // Fallback so the dropdown is never empty even if /proc/mounts is odd.
+    if drives.is_empty() {
+        drives.push(DriveInfo {
+            letter: "/".to_string(),
+            label: String::new(),
+            kind: "本地磁盘".to_string(),
+        });
+    }
+    drives
+}
+
 #[cfg(not(test))]
 #[tauri::command]
 fn list_drives() -> Vec<DriveInfo> {
@@ -265,7 +329,10 @@ fn list_drives() -> Vec<DriveInfo> {
 /// happened").
 #[cfg(not(test))]
 #[tauri::command]
+#[allow(unused_variables)] // `window` 仅 Windows 分支使用（Linux 无父窗口语义）
 fn pick_folder(window: tauri::Window) -> Option<String> {
+    // `mut` 仅在 Windows 分支需要（Linux 分支无 set_parent 赋值）。
+    #[allow(unused_mut)]
     let mut dialog = rfd::FileDialog::new().set_title("选择要扫描的文件夹");
     #[cfg(target_os = "windows")]
     {

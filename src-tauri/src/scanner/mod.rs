@@ -1,7 +1,5 @@
 pub mod parallel;
 pub mod prune;
-pub mod tree_builder;
-pub mod usn;
 pub mod volinfo;
 
 use crate::models::{ScanErrors, ScanProgress, ScannerError, TreeNode};
@@ -89,6 +87,7 @@ impl ScanCtx {
 
 /// Convert a drive-ish path (`C:`, `C:\`, `C:\foo`) into the volume root used for
 /// Win32 volume calls, e.g. `C:\`.
+#[cfg(target_os = "windows")]
 pub(crate) fn volume_root(path: &Path) -> String {
     let s = path.to_string_lossy();
     if let Some(idx) = s.find(':') {
@@ -99,22 +98,25 @@ pub(crate) fn volume_root(path: &Path) -> String {
     }
 }
 
+/// Non-Windows: paths are already absolute mount points (`/`, `/home`, ...).
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn volume_root(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 /// Top-level scan entry point.
 ///
-/// Strategy:
-/// 1. `method == "auto"` (default): if the drive is NTFS, attempt the fast
-///    USN-journal enumeration; on any USN failure fall back to the portable
-///    parallel walker.
-/// 2. `method == "usn"`: force the USN path and surface any error (never falls
-///    back). Useful for detecting that the journal is unavailable.
-/// 3. `method == "parallel"`: force the portable walker on every filesystem.
+/// The USN-journal path was removed (never validated in production); every
+/// strategy maps to the portable parallel walker, which works on all
+/// filesystems and platforms. `method` is accepted for API compatibility only
+/// and always reports `"parallel"` as the strategy.
 ///
-/// Returns the aggregated tree, the strategy that produced it (`"usn"` or
-/// `"parallel"`), and the collected scan errors (access denied etc.).
+/// Returns the aggregated tree, the strategy (`"parallel"`), and the collected
+/// scan errors (access denied etc.).
 pub fn scan_drive(
     window: Option<Window>,
     drive_path: String,
-    method: &str,
+    _method: &str,
     precise: bool,
     threads: Option<u32>,
 ) -> Result<(TreeNode, String, ScanErrors), ScannerError> {
@@ -133,25 +135,26 @@ pub fn scan_drive(
         return Err(ScannerError::Msg(format!("path does not exist: {}", drive_path)));
     }
 
-    match method {
-        "usn" => {
-            let (tree, errors) = usn::scan_usn(&path, window)?;
-            Ok((tree, "usn".to_string(), errors))
-        }
-        "parallel" => {
-            let (tree, errors) = parallel::scan_parallel(&path, window, precise, threads)?;
-            Ok((tree, "parallel".to_string(), errors))
-        }
-        _ => {
-            // "auto"
-            if usn::is_ntfs(&path) {
-                if let Ok((tree, errors)) = usn::scan_usn(&path, window.clone()) {
-                    return Ok((tree, "usn".to_string(), errors));
-                }
-                // USN unavailable / failed -> fall through to the parallel walker.
-            }
-            let (tree, errors) = parallel::scan_parallel(&path, window, precise, threads)?;
-            Ok((tree, "parallel".to_string(), errors))
+    #[cfg(target_os = "linux")]
+    {
+        if is_linux_pseudo_fs(&path) {
+            return Err(ScannerError::Msg(format!(
+                "refusing to scan pseudo filesystem: {}",
+                drive_path
+            )));
         }
     }
+
+    let (tree, errors) = parallel::scan_parallel(&path, window, precise, threads)?;
+    Ok((tree, "parallel".to_string(), errors))
+}
+
+/// Linux pseudo filesystems that must never be walked (virtual files, no real
+/// disk usage, e.g. `/proc/kcore` reports a nonsensical size). Component-level
+/// prefix match so nested paths (`/proc/123/...`) are covered too.
+#[cfg(target_os = "linux")]
+fn is_linux_pseudo_fs(path: &Path) -> bool {
+    ["/proc", "/sys", "/dev", "/run"]
+        .iter()
+        .any(|p| path.starts_with(p))
 }

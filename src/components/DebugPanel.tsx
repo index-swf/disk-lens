@@ -1,11 +1,8 @@
 import { useState } from "react";
-import type { ScanMethod, ScanResult } from "../types";
+import type { ScanResult } from "../types";
 import { formatBytes, formatDuration } from "../utils";
 
 interface DebugPanelProps {
-  /** 当前扫描方式 */
-  method: ScanMethod;
-  onMethodChange: (m: ScanMethod) => void;
   /** 是否精确获取分配大小（逐文件开句柄，更准但更慢） */
   precise: boolean;
   onPreciseChange: (b: boolean) => void;
@@ -18,16 +15,8 @@ interface DebugPanelProps {
   scanning: boolean;
 }
 
-const METHOD_LABELS: Record<ScanMethod, string> = {
-  auto: "自动（USN 优先）",
-  usn: "强制 USN",
-  parallel: "强制并行遍历",
-};
-
-// 可折叠调试面板（默认折叠，点击标题展开）：扫描方式 + 扫描结果统计。
+// 可折叠调试面板（默认折叠，点击标题展开）：扫描参数 + 扫描结果统计。
 export default function DebugPanel({
-  method,
-  onMethodChange,
   precise,
   onPreciseChange,
   threads,
@@ -46,31 +35,12 @@ export default function DebugPanel({
           onClick={() => setCollapsed((c) => !c)}
           aria-expanded={!collapsed}
         >
-          {collapsed ? "▶" : "▼"} 调试面板 / 扫描方式
+          {collapsed ? "▶" : "▼"} 调试面板
         </button>
       </div>
 
       {!collapsed && (
         <div className="debug-body">
-          <div className="debug-row">
-            <span className="debug-label">扫描方式：</span>
-            <div className="debug-radios">
-              {(Object.keys(METHOD_LABELS) as ScanMethod[]).map((m) => (
-                <label key={m} className="debug-radio">
-                  <input
-                    type="radio"
-                    name="scan-method"
-                    value={m}
-                    checked={method === m}
-                    disabled={scanning}
-                    onChange={() => onMethodChange(m)}
-                  />
-                  {METHOD_LABELS[m]}
-                </label>
-              ))}
-            </div>
-          </div>
-
           <div className="debug-row">
             <label className="debug-check">
               <input
@@ -101,7 +71,7 @@ export default function DebugPanel({
             <div className="debug-stats">
               <span>
                 实际策略：
-                <b>{result.strategy_used === "usn" ? "USN 日志" : "并行遍历"}</b>
+                <b>并行遍历</b>
               </span>
               <span>
                 耗时：<b>{formatDuration(result.elapsed_ms)}</b>

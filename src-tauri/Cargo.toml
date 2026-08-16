@@ -19,10 +19,11 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.10"
-# 原生文件夹选择对话框（Windows IFileDialog，供"自定义扫描路径"使用）
+# 原生文件夹选择对话框（Windows IFileDialog / Linux GTK，供"自定义扫描路径"使用）
 rfd = "0.15"
 
-[dependencies.windows]
+# Windows 专属：Win32 卷信息/盘符枚举/USN 等（仅 Windows 目标引入）
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.58"
 features = [
     "Win32_Foundation",
@@ -32,6 +33,10 @@ features = [
     "Win32_System_Ioctl",
     "Win32_System_WindowsProgramming",
 ]
+
+# Unix/Linux 专属：statvfs 卷信息等
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 strip = true

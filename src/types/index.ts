@@ -1,8 +1,5 @@
 // 与后端 Rust 模型严格对齐的接口定义。字段名/类型需与后端序列化结果一致。
 
-/** 扫描策略：auto=自动(USN优先失败降级并行) / usn=强制USN / parallel=强制并行遍历 */
-export type ScanMethod = "auto" | "usn" | "parallel";
-
 /** topN 含义模式：count=每层最多 N 个项目 / percent=覆盖父级 N% 大小为止 */
 export type TopNMode = "count" | "percent";
 
@@ -50,7 +47,8 @@ export interface DriveInfo {
 /** scan_drive 命令的返回结构（裁剪树 + 扫描统计 + 卷信息 + 错误日志） */
 export interface ScanResult {
   root: TreeNode;
-  strategy_used: "usn" | "parallel";
+  /** 固定为 "parallel"（USN 路径已移除） */
+  strategy_used: "parallel";
   elapsed_ms: number;
   total_files: number;
   total_folders: number;

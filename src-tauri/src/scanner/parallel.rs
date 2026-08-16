@@ -1,19 +1,25 @@
 use crate::models::{ScanErrors, ScannerError, TreeNode};
 use crate::scanner::{volinfo, ScanCtx};
 use rayon::prelude::*;
+#[cfg(windows)]
 use std::ffi::OsStr;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use tauri::Window;
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FileStandardInfo, FILE_STANDARD_INFO, GetFileInformationByHandleEx,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
 /// Encode a path as a null-terminated UTF-16 wide string for Win32 APIs.
+#[cfg(windows)]
 pub(crate) fn to_wide(s: &str) -> Vec<u16> {
     let mut v: Vec<u16> = OsStr::new(s).encode_wide().collect();
     v.push(0);
@@ -22,6 +28,7 @@ pub(crate) fn to_wide(s: &str) -> Vec<u16> {
 
 /// Open a handle to a file or directory. Callers MUST close it with `CloseHandle`.
 /// `FILE_FLAG_BACKUP_SEMANTICS` lets us open directory handles.
+#[cfg(windows)]
 fn open_handle(path: &Path) -> windows::core::Result<HANDLE> {
     let wide = to_wide(&path.to_string_lossy());
     unsafe {
@@ -37,9 +44,12 @@ fn open_handle(path: &Path) -> windows::core::Result<HANDLE> {
     }
 }
 
-/// Return `(size, allocated_size)` for a file. Uses `GetFileInformationByHandleEx`
-/// for the true on-disk (allocated) size and falls back to `metadata().len()` when
-/// the handle cannot be opened (e.g. no permission). The handle is always closed.
+/// Return `(size, allocated_size)` for a file (Windows).
+///
+/// Uses `GetFileInformationByHandleEx` for the true on-disk (allocated) size and
+/// falls back to `metadata().len()` when the handle cannot be opened (e.g. no
+/// permission). The handle is always closed.
+#[cfg(windows)]
 pub(crate) fn file_sizes(path: &Path) -> (u64, u64) {
     if let Ok(handle) = open_handle(path) {
         let mut info = FILE_STANDARD_INFO::default();
@@ -63,6 +73,22 @@ pub(crate) fn file_sizes(path: &Path) -> (u64, u64) {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         let len = meta.len();
         (len, len)
+    } else {
+        (0, 0)
+    }
+}
+
+/// Return `(size, allocated_size)` for a file (Unix/Linux).
+///
+/// `st_blocks * 512` is the true on-disk allocation straight from the metadata —
+/// no extra syscall, no handle open (simpler than the Windows path).
+#[cfg(not(windows))]
+pub(crate) fn file_sizes(path: &Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        let size = meta.len();
+        let alloc = meta.blocks().saturating_mul(512).max(size);
+        (size, alloc)
     } else {
         (0, 0)
     }

@@ -1,15 +1,10 @@
 //! Volume-level information for the status bar and allocation rounding.
 //!
-//! All three calls (free/total space, cluster geometry, filesystem name) are
-//! cheap Win32 queries against the volume root (e.g. `C:\`) — one-time per scan,
-//! no per-file cost.
+//! Windows: three cheap Win32 queries against the volume root (`C:\`) — one-time
+//! per scan, no per-file cost. Linux: a single `statvfs` call plus a
+//! `/proc/mounts` lookup for the filesystem name.
 
-use crate::scanner::parallel::to_wide;
 use std::path::Path;
-use windows::core::PCWSTR;
-use windows::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetVolumeInformationW,
-};
 
 /// Snapshot of volume properties.
 #[derive(Clone, Debug)]
@@ -18,7 +13,7 @@ pub struct VolumeInfo {
     pub free_bytes: u64,
     /// Total capacity of the volume in bytes.
     pub total_bytes: u64,
-    /// Filesystem type name, e.g. "NTFS". Empty when the call failed.
+    /// Filesystem type name, e.g. "NTFS" / "ext4". Empty when unavailable.
     pub fs_type: String,
     /// Bytes per allocation unit (cluster), e.g. 4096. 0 when unknown.
     pub cluster_size: u32,
@@ -27,6 +22,29 @@ pub struct VolumeInfo {
 /// Query volume info for the volume backing `root`. Returns `None` when the
 /// volume root cannot be resolved / the API calls fail (e.g. network share).
 pub fn volume_info(root: &Path) -> Option<VolumeInfo> {
+    #[cfg(target_os = "windows")]
+    {
+        volume_info_windows(root)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        volume_info_unix(root)
+    }
+}
+
+/// Bytes per cluster for the volume backing `root` (0 when unknown).
+pub fn cluster_size(root: &Path) -> u32 {
+    volume_info(root).map(|v| v.cluster_size).unwrap_or(0)
+}
+
+#[cfg(target_os = "windows")]
+fn volume_info_windows(root: &Path) -> Option<VolumeInfo> {
+    use crate::scanner::parallel::to_wide;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetVolumeInformationW,
+    };
+
     let root_str = root.to_string_lossy();
     // GetDiskFreeSpace*W want a root like "C:\" (trailing backslash).
     let volume = if root_str.ends_with('\\') {
@@ -82,7 +100,42 @@ pub fn volume_info(root: &Path) -> Option<VolumeInfo> {
     }
 }
 
-/// Bytes per cluster for the volume backing `root` (0 when unknown).
-pub fn cluster_size(root: &Path) -> u32 {
-    volume_info(root).map(|v| v.cluster_size).unwrap_or(0)
+#[cfg(not(target_os = "windows"))]
+fn volume_info_unix(root: &Path) -> Option<VolumeInfo> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let cpath = std::ffi::CString::new(root.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let frsize = st.f_frsize.max(1) as u64;
+    Some(VolumeInfo {
+        free_bytes: (st.f_bavail as u64).saturating_mul(frsize),
+        total_bytes: (st.f_blocks as u64).saturating_mul(frsize),
+        fs_type: read_fs_type(root),
+        cluster_size: frsize.min(u32::MAX as u64) as u32,
+    })
+}
+
+/// Best-effort filesystem name from `/proc/mounts`: match the *deepest* mount
+/// point that prefixes `path` (e.g. "/home" wins over "/" for "/home/user/..."),
+/// then read the fs field ("ext4", "ntfs3", "vfat", ...). The "/" entry is the
+/// natural fallback (length 1).
+#[cfg(not(target_os = "windows"))]
+fn read_fs_type(path: &Path) -> String {
+    let p = path.to_string_lossy();
+    let mut best: Option<(usize, String)> = None;
+    if let Ok(content) = std::fs::read_to_string("/proc/mounts") {
+        for line in content.lines() {
+            let mut it = line.split_whitespace();
+            let _dev = it.next();
+            let mp = it.next().unwrap_or("");
+            let fstype = it.next().unwrap_or("");
+            if p.starts_with(mp) && best.as_ref().map_or(true, |b| mp.len() > b.0) {
+                best = Some((mp.len(), fstype.to_string()));
+            }
+        }
+    }
+    best.map(|(_, t)| t).unwrap_or_default()
 }

@@ -2,7 +2,7 @@ name: Release
 
 # 触发方式：
 #   1. 仓库 Actions 页面 -> 选 Release workflow -> Run workflow（手工触发，测试用，
-#      无需任何 git tag；构建产物为绿色版 exe，放到 Draft release 附件里）
+#      无需任何 git tag；构建产物为绿色版可执行文件，放到 Draft release 附件里）
 #   2. 推送形如 v0.1.0 的 git tag（正式发版，推荐）
 on:
   push:
@@ -14,8 +14,17 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: disk-lens.exe
+          - os: ubuntu-latest
+            artifact: disk-lens
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,34 +43,74 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - name: Install frontend dependencies
         run: npm ci
 
-      # 仅构建 release 二进制（--no-bundle：跳过 MSI/NSIS 打包，规避国内 WiX
-      # 下载超时；前端 dist 仍会嵌入 exe）。以后要恢复安装包：去掉 --no-bundle，
-      # 并把下方上传步骤换成 tauri-apps/tauri-action。
-      - name: Build release (portable exe only)
+      # 仅构建 release 二进制（--no-bundle：跳过安装包，产出绿色版可执行文件；
+      # 前端 dist 仍会嵌入二进制）。以后要恢复 MSI/NSIS/AppImage：去掉 --no-bundle，
+      # 并把上传步骤换成 tauri-apps/tauri-action。
+      - name: Build release (portable binary)
         run: npm run tauri build -- --no-bundle
 
-      # 手工创建 draft release 并上传绿色版 exe（tauri-action 强制要求 bundle
-      # 产物，--no-bundle 下会报 "No artifacts were found"，故不用它）。
+      - name: Upload portable binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.os }}
+          path: src-tauri/target/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    name: Create draft release & upload
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows portable binary
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-windows-latest
+          path: dist-windows
+
+      - name: Download Linux portable binary
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-ubuntu-latest
+          path: dist-linux
+
+      # 手工创建 draft release 并上传两个绿色版二进制。
       # 推 tag 时用 tag 名；手工触发时用 manual-<run_number>，不污染 tag 列表。
-      - name: Create draft release & upload portable exe
+      - name: Create draft release & upload binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NOTES: |
             ## DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}
 
-            Windows 磁盘占用分析器。附件为**绿色版可执行文件**（免安装，双击即用）：
+            Windows 磁盘占用分析器。附件为**绿色版可执行文件**（免安装，直接运行）：
 
-            - **`disk-lens.exe`** — 绿色版单文件（Windows 10/11 + WebView2 Runtime，Win11 自带）
+            - **`disk-lens.exe`** — Windows 绿色版（Windows 10/11 + WebView2 Runtime，Win11 自带）
+            - **`disk-lens`** — Linux 绿色版（Ubuntu 22.04/24.04，需 WebKitGTK 运行库）
         shell: bash
         run: |
           TAG="${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_number) }}"
           TITLE="DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}"
           gh release create "$TAG" \
-            src-tauri/target/release/disk-lens.exe \
+            dist-windows/disk-lens.exe \
+            dist-linux/disk-lens \
             --title "$TITLE" \
             --notes "$RELEASE_NOTES" \
             --draft
-          echo "created release $TAG with disk-lens.exe"
+          echo "created release $TAG with portable binaries"

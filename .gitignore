@@ -29,3 +29,6 @@ docs/会话操作日志.md
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
+# 会话导出（内部存档，不入库）
+会话导出/
