@@ -10,6 +10,7 @@
     "allow-scan-drive",
     "allow-get-node",
     "allow-list-drives",
-    "allow-pick-folder"
+    "allow-pick-folder",
+    "allow-cancel-scan"
   ]
 }

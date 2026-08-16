@@ -9,6 +9,13 @@ use crate::models::{ScannerError, TreeNode};
 use crate::scanner::prune::{prune, TopNMode};
 use crate::scanner::scan_drive;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+/// Cancellation flag helper for tests (never cancels).
+fn no_cancel() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
 
 // ---------- 构造辅助 ----------
 
@@ -42,7 +49,7 @@ fn scan_parallel_real_project() {
     // 扫真实的 src-tauri 源码目录（小且真实），验证结构与一致性。
     let root_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let (tree, strategy, errors) =
-        scan_drive(None, root_dir.to_string_lossy().into_owned(), "parallel", false, None)
+        scan_drive(None, root_dir.to_string_lossy().into_owned(), "parallel", false, None, no_cancel())
             .expect("扫描项目目录应成功");
 
     assert!(strategy == "parallel", "强制 parallel 应返回 parallel");
@@ -70,7 +77,7 @@ fn scan_missing_path_errors() {
     } else {
         "/__tree_scan_test_nonexistent_xyz_123".to_string()
     };
-    let res = scan_drive(None, missing, "parallel", false, None);
+    let res = scan_drive(None, missing, "parallel", false, None, no_cancel());
     match res {
         Err(ScannerError::Msg(m)) => assert!(
             m.contains("does not exist"),
@@ -294,7 +301,7 @@ fn perf_thread_scaling_on_project() {
 
     for threads in [Some(1u32), None] {
         let t0 = std::time::Instant::now();
-        let (tree, _, _) = scan_drive(None, root_dir.clone(), "parallel", false, threads)
+        let (tree, _, _) = scan_drive(None, root_dir.clone(), "parallel", false, threads, no_cancel())
             .expect("扫描应成功");
         let dt = t0.elapsed();
         let rate = tree.file_count as f64 / dt.as_secs_f64();
@@ -321,7 +328,7 @@ fn perf_scan_c_drive() {
         "/".to_string()
     };
     let t0 = std::time::Instant::now();
-    let res = scan_drive(None, target, "parallel", false, None);
+    let res = scan_drive(None, target, "parallel", false, None, no_cancel());
     let dt = t0.elapsed();
     match res {
         Ok((tree, strat, _errors)) => {

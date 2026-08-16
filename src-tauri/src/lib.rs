@@ -7,7 +7,8 @@ mod api_tests;
 use models::{DriveInfo, ScanResult, TreeNode};
 use scanner::prune::TopNMode;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Process-wide cache of the most recent *full* scan tree. The on-the-wire
@@ -15,12 +16,19 @@ use std::time::Instant;
 /// memory limits); the full tree is kept here so the frontend can lazily expand
 /// any node via `get_node` without re-scanning.
 #[cfg(not(test))]
-struct AppState(Mutex<Option<TreeNode>>);
+struct AppState {
+    tree: Mutex<Option<TreeNode>>,
+    /// Cancellation flag of the currently running scan (set by `cancel_scan`).
+    cancel: Mutex<Option<Arc<AtomicBool>>>,
+}
 
 #[cfg(not(test))]
 impl Default for AppState {
     fn default() -> Self {
-        AppState(Mutex::new(None))
+        AppState {
+            tree: Mutex::new(None),
+            cancel: Mutex::new(None),
+        }
     }
 }
 
@@ -55,6 +63,13 @@ async fn scan_drive(
         &drive_path,
     ))));
 
+    // Cooperative cancellation: expose the flag so `cancel_scan` can flip it.
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state
+        .cancel
+        .lock()
+        .map_err(|_| "cancel mutex poisoned".to_string())? = Some(cancel.clone());
+
     // Run the (blocking) file walk on a dedicated thread so we don't stall the
     // async runtime. Progress is streamed back via window events.
     let window_clone = window.clone();
@@ -66,6 +81,7 @@ async fn scan_drive(
             &method,
             precise,
             threads,
+            cancel,
         )
         .map_err(|e| e.to_string())
     })
@@ -79,7 +95,7 @@ async fn scan_drive(
     // prune from the cached reference — avoids deep-cloning a multi-million
     // node tree (which would momentarily double memory usage).
     let mut guard = state
-        .0
+        .tree
         .lock()
         .map_err(|_| "scan state mutex poisoned".to_string())?;
     *guard = Some(full_tree);
@@ -138,7 +154,7 @@ async fn get_node(
     let merge_files = merge_files.unwrap_or(false);
 
     let guard = state
-        .0
+        .tree
         .lock()
         .map_err(|_| "scan state mutex poisoned".to_string())?;
     let root = guard
@@ -147,11 +163,13 @@ async fn get_node(
 
     // 容错：前端在 Treemap 里点到"当前层的大矩形"会触发"自我下钻"，
     // 把当前节点名当成路径首段发过来（例如根层会发 ["C:"]）。这里把等于根名
-    // 的首段去掉，避免无意义的 "node not found"。
-    let walk: &[String] = if path.first().map_or(false, |f| f == &root.name) {
-        &path[1..]
+    // 的首段去掉；同时过滤空段（Linux 绝对路径 "/home/x".split('/') 的首段
+    // 是空串），避免无意义的 "node not found"。
+    let cleaned: Vec<String> = path.iter().filter(|s| !s.is_empty()).cloned().collect();
+    let walk: &[String] = if cleaned.first().map_or(false, |f| f == &root.name) {
+        &cleaned[1..]
     } else {
-        &path
+        &cleaned[..]
     };
 
     if cfg!(debug_assertions) {
@@ -332,6 +350,19 @@ fn list_drives() -> Vec<DriveInfo> {
     enumerate_drives()
 }
 
+/// Request cancellation of the currently running scan. Cooperative: the walker
+/// checks the flag at every directory and stops descending (returns a partial
+/// tree). No-op when no scan is running.
+#[cfg(not(test))]
+#[tauri::command]
+fn cancel_scan(state: tauri::State<'_, AppState>) {
+    if let Ok(guard) = state.cancel.lock() {
+        if let Some(flag) = guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Open the native Windows folder-picker (IFileDialog via `rfd`) and return the
 /// chosen folder path, or `None` if the user cancelled. The Tauri window is
 /// passed as the dialog's parent so the dialog always appears on top of the app
@@ -363,7 +394,8 @@ pub fn run() {
             scan_drive,
             get_node,
             list_drives,
-            pick_folder
+            pick_folder,
+            cancel_scan
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,20 +13,22 @@ import StatusBar from "./components/StatusBar";
 import TreeTable, { type SortKey, type SortDir } from "./components/TreeTable";
 import "./App.css";
 
-/** 按 path key（"C:/Users/index"）在 root（+loaded 覆盖）中定位节点 */
+/** 按 path key（"C:/Users/index" / "/home/caoyy"）在 root（+loaded 覆盖）中定位节点 */
 function findNode(
   root: TreeNode,
   loaded: Map<string, TreeNode>,
   key: string
 ): TreeNode | null {
-  const segs = key.split("/");
+  const segs = key.split("/"); // Linux 绝对路径首段为空串
   let cur: TreeNode = loaded.get(segs[0]) ?? root;
   for (let i = 1; i < segs.length; i++) {
     const seg = segs[i];
+    if (!seg) continue; // 跳过空段（Linux 前导/连续斜杠）
     const child: TreeNode | undefined =
       cur.children.find((c) => c.name === seg) ??
       cur.children.find((c) => c.name.toLowerCase() === seg.toLowerCase());
     if (!child) return null;
+    // childKey 用原始分段 join（保留前导 "/"），与 loaded map 的 key 一致
     const childKey = segs.slice(0, i + 1).join("/");
     cur = loaded.get(childKey) ?? child;
   }
@@ -130,7 +132,7 @@ export default function App() {
         if (node && node.truncated && !loaded.has(key)) {
           setDrilling(true);
           try {
-            const path = key.split("/"); // ["C:","Users",...]；后端会剥掉首段根名
+            const path = key.split("/").filter((s) => s.length > 0);
             const subtree = await invoke<TreeNode>("get_node", {
               path,
               maxDepth: 4,
@@ -179,6 +181,12 @@ export default function App() {
     setProgress(p);
   }, []);
 
+  const handleCancelScan = useCallback(() => {
+    invoke("cancel_scan").catch(() => {
+      /* 扫描已结束等场景忽略 */
+    });
+  }, []);
+
   return (
     <div className="app">
       <header className="app-header">
@@ -206,7 +214,21 @@ export default function App() {
       {drilling && <div className="app-drilling">正在加载子目录…</div>}
       {error && <div className="app-error">出错：{error}</div>}
 
-      {root ? (
+      {scanning ? (
+        <main className="app-main-single">
+          <div className="app-empty">正在扫描…</div>
+          {/* 停止按钮：工作区正中央 */}
+          <div className="scan-stop-overlay">
+            <button
+              type="button"
+              className="scan-stop-btn"
+              onClick={handleCancelScan}
+            >
+              停止扫描
+            </button>
+          </div>
+        </main>
+      ) : root ? (
         <main className="app-main-single">
           <TreeTable
             root={root}

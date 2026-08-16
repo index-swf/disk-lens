@@ -1,12 +1,13 @@
 use crate::models::{ScanErrors, ScannerError, TreeNode};
 use crate::scanner::{volinfo, ScanCtx};
 use rayon::prelude::*;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::AtomicBool};
 #[cfg(windows)]
 use std::ffi::OsStr;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use tauri::Window;
 #[cfg(windows)]
 use windows::core::PCWSTR;
@@ -117,6 +118,10 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
 /// directory cycles cannot occur without reparse points). Unreadable directories
 /// are skipped and scanning continues.
 fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<TreeNode> {
+    // Cooperative cancellation: the UI "stop" button flips this flag.
+    if ctx.cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     let read_dir = match std::fs::read_dir(path) {
         Ok(r) => r,
         Err(e) => {
@@ -281,8 +286,9 @@ pub fn scan_parallel(
     window: Option<Window>,
     precise: bool,
     threads: Option<u32>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(TreeNode, ScanErrors), ScannerError> {
-    let mut ctx = ScanCtx::new(window);
+    let mut ctx = ScanCtx::new(window, cancelled);
     // One cheap Win32 query for the volume cluster geometry; used by the fast
     // path to round file sizes up to whole clusters for the allocated column.
     ctx.cluster = volinfo::cluster_size(root);

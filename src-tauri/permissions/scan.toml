@@ -22,3 +22,8 @@ commands.allow = ["list_drives"]
 identifier = "allow-pick-folder"
 description = "Allow the frontend to invoke the pick_folder command"
 commands.allow = ["pick_folder"]
+
+[[permission]]
+identifier = "allow-cancel-scan"
+description = "Allow the frontend to invoke the cancel_scan command"
+commands.allow = ["cancel_scan"]

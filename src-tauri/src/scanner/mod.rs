@@ -4,8 +4,8 @@ pub mod volinfo;
 
 use crate::models::{ScanErrors, ScanProgress, ScannerError, TreeNode};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::Window;
 use tauri::Emitter;
@@ -29,10 +29,14 @@ pub(crate) struct ScanCtx {
     pub errors: Mutex<Vec<String>>,
     /// Bytes per cluster of the scanned volume; 0 = unknown (no rounding).
     pub cluster: u32,
+    /// Cancellation flag set by the UI "stop scan" button. Walkers check it at
+    /// every directory and stop descending when set (returning the partial tree
+    /// aggregated so far).
+    pub cancelled: Arc<AtomicBool>,
 }
 
 impl ScanCtx {
-    pub fn new(window: Option<Window>) -> Self {
+    pub fn new(window: Option<Window>, cancelled: Arc<AtomicBool>) -> Self {
         Self {
             window,
             scanned_files: AtomicU64::new(0),
@@ -41,6 +45,7 @@ impl ScanCtx {
             error_count: AtomicU64::new(0),
             errors: Mutex::new(Vec::new()),
             cluster: 0,
+            cancelled,
         }
     }
 
@@ -109,16 +114,18 @@ pub(crate) fn volume_root(path: &Path) -> String {
 /// The USN-journal path was removed (never validated in production); every
 /// strategy maps to the portable parallel walker, which works on all
 /// filesystems and platforms. `method` is accepted for API compatibility only
-/// and always reports `"parallel"` as the strategy.
+/// and always reports `"parallel"` as the strategy. `cancelled` is the
+/// cooperative stop flag the UI flips via `cancel_scan`.
 ///
 /// Returns the aggregated tree, the strategy (`"parallel"`), and the collected
-/// scan errors (access denied etc.).
+/// scan errors (access denied etc.). The tree may be partial if cancelled.
 pub fn scan_drive(
     window: Option<Window>,
     drive_path: String,
     _method: &str,
     precise: bool,
     threads: Option<u32>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(TreeNode, String, ScanErrors), ScannerError> {
     // Normalize "C:" -> "C:\" so we scan the whole volume rather than the drive's
     // current working directory. Rust's std adds the `\\?\` prefix as needed for
@@ -145,7 +152,7 @@ pub fn scan_drive(
         }
     }
 
-    let (tree, errors) = parallel::scan_parallel(&path, window, precise, threads)?;
+    let (tree, errors) = parallel::scan_parallel(&path, window, precise, threads, cancelled)?;
     Ok((tree, "parallel".to_string(), errors))
 }
 

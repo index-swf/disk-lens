@@ -487,6 +487,7 @@ body {
   min-height: 0;
   padding: 12px;
   display: flex;
+  position: relative; /* 供扫描停止按钮的绝对定位覆盖层使用 */
 }
 .app-empty {
   flex: 1;
@@ -496,6 +497,32 @@ body {
   color: #9aa7c2;
   font-size: 1rem;
 }
+/* ---------- 扫描停止按钮（工作区正中央） ---------- */
+.scan-stop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  pointer-events: none;
+}
+.scan-stop-btn {
+  pointer-events: auto;
+  padding: 0.7em 2.4em;
+  border-radius: 8px;
+  border: 1px solid #d9534f;
+  background: #c0392b;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.scan-stop-btn:hover {
+  background: #a93226;
+}
+
 .tree-table-wrap {
   flex: 1;
   min-height: 0;

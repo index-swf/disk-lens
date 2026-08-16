@@ -147,7 +147,11 @@ function buildRows(
   parentSize: number,
   rows: TreeRow[]
 ): void {
-  const key = parentKey ? `${parentKey}/${node.name}` : node.name;
+  // Linux 绝对路径下拼接会产生 "//home" 双斜杠；规范化成单斜杠，保证 key
+  // 与前端 findNode / 后端 get_node 的路径解析一致。
+  const key = parentKey
+    ? `${parentKey}/${node.name}`.replace(/\/+/g, "/")
+    : node.name;
   // 若已通过 get_node 懒加载到更完整的子树，优先用加载版。
   const effective = loaded.get(key) ?? node;
   const isRoot = depth === 0;
