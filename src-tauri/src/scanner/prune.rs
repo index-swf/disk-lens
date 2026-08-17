@@ -19,11 +19,15 @@ pub enum TopNMode {
 fn aggregate_others(rest: &[&TreeNode]) -> TreeNode {
     let mut size = 0u64;
     let mut allocated_size = 0u64;
+    let mut size_self = 0u64;
+    let mut allocated_self = 0u64;
     let mut file_count = 0u32;
     let mut folder_count = 0u32;
     for n in rest {
         size += n.size;
         allocated_size += n.allocated_size;
+        size_self += n.size_self;
+        allocated_self += n.allocated_self;
         file_count += n.file_count;
         folder_count += n.folder_count;
     }
@@ -31,6 +35,8 @@ fn aggregate_others(rest: &[&TreeNode]) -> TreeNode {
         name: format!("(其他 {} 项)", rest.len()),
         size,
         allocated_size,
+        size_self,
+        allocated_self,
         file_count,
         folder_count,
         last_modified: 0,
@@ -45,16 +51,22 @@ fn aggregate_others(rest: &[&TreeNode]) -> TreeNode {
 fn file_aggregate(files: &[&TreeNode]) -> TreeNode {
     let mut size = 0u64;
     let mut allocated_size = 0u64;
+    let mut size_self = 0u64;
+    let mut allocated_self = 0u64;
     let mut file_count = 0u32;
     for f in files {
         size += f.size;
         allocated_size += f.allocated_size;
+        size_self += f.size_self;
+        allocated_self += f.allocated_self;
         file_count += f.file_count;
     }
     TreeNode {
         name: format!("({} 个文件)", file_count),
         size,
         allocated_size,
+        size_self,
+        allocated_self,
         file_count,
         folder_count: 0,
         last_modified: 0,
@@ -117,6 +129,8 @@ pub fn prune(
             name: node.name.clone(),
             size: node.size,
             allocated_size: node.allocated_size,
+            size_self: node.size_self,
+            allocated_self: node.allocated_self,
             file_count: node.file_count,
             folder_count: node.folder_count,
             last_modified: node.last_modified,
@@ -192,6 +206,8 @@ pub fn prune(
         name: node.name.clone(),
         size: node.size,
         allocated_size: node.allocated_size,
+        size_self: node.size_self,
+        allocated_self: node.allocated_self,
         file_count: node.file_count,
         folder_count: node.folder_count,
         last_modified: node.last_modified,

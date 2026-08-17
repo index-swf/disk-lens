@@ -7,6 +7,7 @@ mod api_tests;
 use models::{DriveInfo, ScanResult, TreeNode};
 use scanner::prune::TopNMode;
 use serde::Serialize;
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,14 +39,19 @@ impl Default for AppState {
 // JSON 文件，供外部工具 / AI agent 直接读取（免去重新扫描）。
 // ---------------------------------------------------------------------------
 
-/// 导出用的树节点：在 `TreeNode` 基础上补全**绝对路径** `path` 与 `is_dir`。
-/// agent 拿到后可直接按 path 定位要清理的目录/文件。字段刻意精简
-/// （无 allocated_size），并用紧凑 JSON 序列化，尽量节省 agent 的 token。
+/// 导出用的树节点：在 `TreeNode` 基础上补全**绝对路径** `path` 与 `is_dir`，
+/// 以及区分"自身大小 / 含后代大小 / 自身实际占用"的字段。
+/// 供"适合人类阅读"的树状 YAML 使用，也是扁平 NDJSON（agent 模式）的来源。
 #[derive(Serialize, Clone)]
 struct ExportNode {
     path: String,
     name: String,
+    /// 含全部后代的总大小（目录=自身文件+所有子树；文件=自身）。
     size: u64,
+    /// 该节点自身直接文件的字节数之和（不含后代）。
+    size_self: u64,
+    /// 自身实际磁盘占用（稀疏文件与逻辑大小不同；普通文件 ≈ size_self）。
+    actual_size_self: u64,
     /// 占父目录大小的百分比（0-100，保留两位小数）；根节点为 100。
     percent_of_parent: f64,
     file_count: u32,
@@ -69,6 +75,8 @@ struct ExportSummary {
 struct ExportPayload {
     app: &'static str,
     version: &'static str,
+    /// 导出格式版本，未来演进时 agent/工具可据此判断解析方式。
+    schema_version: u32,
     exported_at: String,
     /// "full" 或 "filtered"。
     mode: &'static str,
@@ -77,6 +85,92 @@ struct ExportPayload {
     root_path: String,
     summary: ExportSummary,
     root: ExportNode,
+}
+
+/// 扁平 NDJSON（agent 模式）的单行节点 —— 每行一个节点对象，schema v2。
+/// 所有大小字段为 int64 字节；`depth`/`parent` 供 agent 快速判断层级并
+/// O(n) 重建树（无需递归解析嵌套结构）。
+#[derive(Serialize)]
+struct AgentNode {
+    path: String,
+    is_dir: bool,
+    /// 自身直接文件的字节数之和（不含后代）。
+    size_self: u64,
+    /// 含全部后代的大小（文件 = size_self）。
+    size_total: u64,
+    /// 自身实际磁盘占用字节数（稀疏文件 < size_self；普通文件 = size_self）。
+    actual_size_self: u64,
+    /// 目录内文件数（仅目录节点输出）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_count: Option<u32>,
+    /// 目录内子目录数（仅目录节点输出）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir_count: Option<u32>,
+    /// 最后修改时间（Unix 秒）。
+    mtime: i64,
+    /// 距根节点层级（根 = 0）。
+    depth: u32,
+    /// 父目录绝对路径；根节点无此字段。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    /// 过滤模式下节点被保留的原因："self"（自身达标）/ "child"（因子项达标）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched: Option<&'static str>,
+}
+
+/// agent 模式的元信息文件（与 .ndjson 同名 .meta.json），供程序免解析全量。
+#[derive(Serialize)]
+struct AgentMeta {
+    app: &'static str,
+    version: &'static str,
+    schema_version: u32,
+    exported_at: String,
+    mode: &'static str,
+    min_size_bytes: u64,
+    root_path: String,
+    summary: ExportSummary,
+    line_count: u64,
+}
+
+/// 把导出树流式写成 NDJSON 行（每行一个节点，\n 结尾；先序遍历）。
+/// `threshold` > 0 时为过滤模式，输出每个节点的 `matched` 保留原因。
+fn write_agent_rows(
+    w: &mut impl std::io::Write,
+    node: &ExportNode,
+    parent: Option<&str>,
+    depth: u32,
+    threshold: u64,
+) -> std::io::Result<()> {
+    let matched = if threshold > 0 {
+        if depth == 0 {
+            None // 根节点作为锚点，不标 matched
+        } else if node.size_self >= threshold {
+            Some("self")
+        } else {
+            Some("child")
+        }
+    } else {
+        None
+    };
+    let row = AgentNode {
+        path: node.path.clone(),
+        is_dir: node.is_dir,
+        size_self: node.size_self,
+        size_total: node.size,
+        actual_size_self: node.actual_size_self,
+        file_count: if node.is_dir { Some(node.file_count) } else { None },
+        dir_count: if node.is_dir { Some(node.folder_count) } else { None },
+        mtime: node.last_modified,
+        depth,
+        parent: parent.map(|p| p.to_string()),
+        matched,
+    };
+    serde_json::to_writer(&mut *w, &row)?;
+    w.write_all(b"\n")?;
+    for c in &node.children {
+        write_agent_rows(w, c, Some(&node.path), depth + 1, threshold)?;
+    }
+    Ok(())
 }
 
 /// 拼接绝对路径。`parent` 为空表示根节点（直接用 name，如 "C:" / "/"）。
@@ -134,6 +228,8 @@ fn build_export_node(
         path,
         name: node.name.clone(),
         size: node.size,
+        size_self: node.size_self,
+        actual_size_self: node.allocated_self,
         percent_of_parent,
         file_count: node.file_count,
         folder_count: node.folder_count,
@@ -504,16 +600,24 @@ fn cancel_scan(state: tauri::State<'_, AppState>) {
 ///
 /// `filter=false` exports the whole tree; `filter=true` keeps only nodes whose
 /// size >= `min_size_mb` (directories recursively, files individually; the root
-/// is always kept as an anchor). Pops a native "save as" dialog for the target
-/// path (default filename includes a timestamp), writes the file, and returns
-/// the saved path. Returns an error if no scan has been cached yet or the user
-/// cancels the dialog.
+/// is always kept as an anchor).
+///
+/// `export_type` selects the format:
+/// - `"human"`（适合人类阅读）: 树状 YAML（保留目录层级缩进）。
+/// - `"agent"`（适合 Agent 读取）: 扁平 NDJSON（每行一个节点，含
+///   size_self/size_total/actual_size_self/depth/parent，可流式解析），
+///   并额外写入同目录同名 `.meta.json` 元信息文件。
+///
+/// Pops a native "save as" dialog for the target path (default filename includes
+/// a timestamp), writes the file(s), and returns the saved path. Returns an
+/// error if no scan has been cached yet or the user cancels the dialog.
 #[cfg(not(test))]
 #[tauri::command]
 #[allow(unused_variables)] // `window` 仅 Windows 分支使用（对话框父窗口）
 fn export_scan_data(
     window: tauri::Window,
     state: tauri::State<'_, AppState>,
+    export_type: String,
     filter: bool,
     min_size_mb: u64,
 ) -> Result<String, String> {
@@ -522,6 +626,7 @@ fn export_scan_data(
     } else {
         0
     };
+    let agent_mode = export_type == "agent";
 
     // 锁内只做"构建导出树"（遍历+拼路径，毫秒级），随后立即释放锁，
     // 避免在用户慢慢挑保存位置时阻塞 get_node / scan_drive。
@@ -538,34 +643,21 @@ fn export_scan_data(
 
     let (node_count, dir_count, file_count) = count_export_nodes(&export_root);
     let now = chrono::Local::now();
+    let ts = now.format("%Y%m%d-%H%M%S").to_string();
     let mode: &'static str = if filter { "filtered" } else { "full" };
-    let payload = ExportPayload {
-        app: "DiskLens",
-        version: env!("CARGO_PKG_VERSION"),
-        exported_at: now.format("%Y-%m-%d %H:%M:%S %z").to_string(),
-        mode,
-        min_size_bytes: threshold,
-        root_path,
-        summary: ExportSummary {
-            node_count,
-            dir_count,
-            file_count,
-            total_size: export_root.size,
-        },
-        root: export_root,
+    let summary = ExportSummary {
+        node_count,
+        dir_count,
+        file_count,
+        total_size: export_root.size,
     };
-    // 紧凑序列化（无缩进）：减少导出体积，节省 agent 读取时的 token
-    let json = serde_json::to_string(&payload).map_err(|e| format!("序列化失败: {e}"))?;
+    let exported_at = now.format("%Y-%m-%d %H:%M:%S %z").to_string();
 
-    // 默认文件名带时间戳：disklens-filtered-500mb-20260817-140630.json
-    let default_name = if filter {
-        format!(
-            "disklens-filtered-{}mb-{}.json",
-            min_size_mb,
-            now.format("%Y%m%d-%H%M%S")
-        )
+    // 默认文件名带时间戳：disklens-human-20260817-140630.yaml 等
+    let default_name = if agent_mode {
+        format!("disklens-agent-{ts}.ndjson")
     } else {
-        format!("disklens-full-{}.json", now.format("%Y%m%d-%H%M%S"))
+        format!("disklens-human-{ts}.yaml")
     };
 
     // `mut` 仅在 Windows 分支需要（Linux 分支无 set_parent 赋值）。
@@ -573,7 +665,10 @@ fn export_scan_data(
     let mut dialog = rfd::FileDialog::new()
         .set_title("导出扫描数据")
         .set_file_name(&default_name)
-        .add_filter("JSON", &["json"]);
+        .add_filter(
+            if agent_mode { "NDJSON" } else { "YAML" },
+            &[if agent_mode { "ndjson" } else { "yaml" }],
+        );
     #[cfg(target_os = "windows")]
     {
         dialog = dialog.set_parent(&window);
@@ -582,8 +677,52 @@ fn export_scan_data(
         .save_file()
         .ok_or_else(|| "导出已取消".to_string())?;
 
-    std::fs::write(&path, json).map_err(|e| format!("写入文件失败: {e}"))?;
-    Ok(path.to_string_lossy().into_owned())
+    if agent_mode {
+        // ---- agent readable：扁平 NDJSON（流式写，避免全量构建内存翻倍） ----
+        let file = std::fs::File::create(&path).map_err(|e| format!("创建文件失败: {e}"))?;
+        let mut buf = std::io::BufWriter::new(file);
+        write_agent_rows(&mut buf, &export_root, None, 0, threshold)
+            .map_err(|e| format!("写入 NDJSON 失败: {e}"))?;
+        buf.flush().map_err(|e| format!("写入 NDJSON 失败: {e}"))?;
+
+        // 同目录同名 .meta.json 元信息
+        let meta = AgentMeta {
+            app: "DiskLens",
+            version: env!("CARGO_PKG_VERSION"),
+            schema_version: 2,
+            exported_at,
+            mode,
+            min_size_bytes: threshold,
+            root_path,
+            summary,
+            line_count: node_count,
+        };
+        let meta_json = serde_json::to_string(&meta).map_err(|e| format!("序列化失败: {e}"))?;
+        let meta_path = path.with_file_name(format!(
+            "{}.meta.json",
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        std::fs::write(&meta_path, meta_json).map_err(|e| format!("写入元信息失败: {e}"))?;
+        Ok(format!("{}\n（元信息: {}）", path.display(), meta_path.display()))
+    } else {
+        // ---- human readable：树状 YAML（保留层级缩进） ----
+        let payload = ExportPayload {
+            app: "DiskLens",
+            version: env!("CARGO_PKG_VERSION"),
+            schema_version: 2,
+            exported_at,
+            mode,
+            min_size_bytes: threshold,
+            root_path,
+            summary,
+            root: export_root,
+        };
+        let yaml = serde_yaml::to_string(&payload).map_err(|e| format!("序列化失败: {e}"))?;
+        std::fs::write(&path, yaml).map_err(|e| format!("写入文件失败: {e}"))?;
+        Ok(path.to_string_lossy().into_owned())
+    }
 }
 
 /// Open the native Windows folder-picker (IFileDialog via `rfd`) and return the

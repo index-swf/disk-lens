@@ -30,6 +30,9 @@ fn node(
         name: name.to_string(),
         size,
         allocated_size: size,
+        // 测试简化：叶子（无子节点）视为文件，size_self = size；目录视为 0。
+        size_self: if children.is_empty() { size } else { 0 },
+        allocated_self: if children.is_empty() { size } else { 0 },
         file_count: files,
         folder_count: folders,
         last_modified: 0,
@@ -350,6 +353,54 @@ fn export_full_keeps_all_nodes_with_paths() {
     // 占父目录百分比：根=100；dirA = 810/860 = 94.19
     assert_eq!(export.percent_of_parent, 100.0);
     assert!((a.percent_of_parent - (810.0 / 860.0 * 100.0)).abs() < 0.01);
+
+    // size_self / actual_size_self 语义（测试构造：目录无直接文件→0，文件=自身）
+    assert_eq!(export.size_self, 0, "根目录无直接文件");
+    assert_eq!(a.size_self, 0, "dirA 无直接文件（仅子文件）");
+    let big = a.children.iter().find(|f| f.name == "big.bin").unwrap();
+    assert_eq!(big.size_self, 800);
+    assert_eq!(big.actual_size_self, 800);
+}
+
+#[test]
+fn export_agent_rows_flat_with_depth_parent_matched() {
+    use crate::{build_export_node, write_agent_rows};
+    // 阈值 60：dirA(size_total 90) 因子项保留；big.bin(80) 自身达标；small(10) 滤掉
+    let big_file = node("big.bin", 80, 1, 0, vec![]);
+    let small_file = node("small.txt", 10, 1, 0, vec![]);
+    let dir_a = dir("dirA", 90, vec![big_file, small_file]);
+    let root = dir("C:", 90, vec![dir_a]);
+    let export = build_export_node(&root, "", 0, 60);
+
+    let mut buf: Vec<u8> = Vec::new();
+    write_agent_rows(&mut buf, &export, None, 0, 60).unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "根 + dirA + big.bin（small 被滤）");
+
+    let root_row: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(root_row["path"], "C:");
+    assert_eq!(root_row["depth"], 0);
+    assert!(root_row["parent"].is_null(), "根节点无 parent");
+    assert!(root_row["matched"].is_null(), "根节点不标 matched");
+    assert_eq!(root_row["size_total"], 90);
+    assert_eq!(root_row["is_dir"], true);
+
+    let a_row: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(a_row["depth"], 1);
+    assert_eq!(a_row["parent"], "C:");
+    assert_eq!(a_row["matched"], "child", "dirA 因子项达标被保留");
+    assert_eq!(a_row["size_total"], 90);
+    assert_eq!(a_row["size_self"], 0);
+
+    let f_row: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(f_row["depth"], 2);
+    assert_eq!(f_row["matched"], "self", "big.bin 自身达标");
+    assert_eq!(f_row["size_self"], 80);
+    assert_eq!(f_row["size_total"], 80);
+    assert_eq!(f_row["is_dir"], false);
+    assert!(f_row.get("file_count").is_none(), "文件节点不输出 file_count");
+    assert_eq!(f_row["parent"], a_row["path"], "big.bin 的 parent 为 dirA 路径");
 }
 
 #[test]

@@ -8,6 +8,10 @@ export interface TreeNode {
   name: string;
   size: number;
   allocated_size: number;
+  /** 仅该目录直接文件（不含后代）的逻辑大小；文件节点 = size */
+  size_self?: number;
+  /** 仅该目录直接文件（不含后代）的实际磁盘占用；文件节点 = allocated_size */
+  allocated_self?: number;
   file_count: number;
   folder_count: number;
   /** 最后修改时间，Unix 秒（UTC）；0 表示未知 */

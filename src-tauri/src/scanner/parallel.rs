@@ -208,6 +208,8 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
                 name,
                 size: sz,
                 allocated_size: al,
+                size_self: sz,
+                allocated_self: al,
                 file_count: 1,
                 folder_count: 0,
                 last_modified: mtime_secs(&meta),
@@ -256,6 +258,8 @@ fn scan_dir(path: &Path, ctx: &ScanCtx, is_root: bool, precise: bool) -> Option<
         name,
         size,
         allocated_size: allocated,
+        size_self: dir_size,
+        allocated_self: dir_alloc,
         file_count,
         folder_count: folder_count_total,
         // `meta` above is a *child* entry's metadata; the directory's own mtime

@@ -10,8 +10,17 @@ use serde::Serialize;
 #[derive(Serialize, Clone, Debug)]
 pub struct TreeNode {
     pub name: String,
+    /// 含全部后代的总大小（目录=自身文件+所有子树；文件=自身）。
     pub size: u64,
+    /// 含后代的磁盘实际占用（Windows 按簇取整 / Linux st_blocks×512）。
     pub allocated_size: u64,
+    /// 仅该目录下直接文件（不含后代）的逻辑大小合计；文件节点 = size。
+    /// 导出给 agent 时用（size_total = size，size_self = 自身文件）。
+    #[serde(default)]
+    pub size_self: u64,
+    /// 仅该目录下直接文件（不含后代）的实际磁盘占用；文件节点 = allocated_size。
+    #[serde(default)]
+    pub allocated_self: u64,
     pub file_count: u32,
     pub folder_count: u32,
     /// Last modification time, Unix seconds (UTC). 0 when not available.
