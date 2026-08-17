@@ -61,6 +61,125 @@ body {
   cursor: not-allowed;
 }
 
+/* ---------- 导出按钮 ---------- */
+.export-btn {
+  border-radius: 8px;
+  border: 1px solid #3a4a6b;
+  padding: 0.5em 1em;
+  font-size: 0.95em;
+  font-weight: 600;
+  color: #e6ebf5;
+  background-color: #2b3858;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.export-btn:hover:not(:disabled) {
+  background-color: #33456b;
+}
+.export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- 导出对话框 ---------- */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 14, 24, 0.55);
+}
+.dialog {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  border-radius: 10px;
+  border: 1px solid #3a4a6b;
+  background: #1c2540;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.dialog-title {
+  margin: 0 0 14px;
+  font-size: 1.05rem;
+  color: #e6ebf5;
+}
+.dialog-section {
+  margin-bottom: 14px;
+}
+.dialog-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  color: #9aa7c2;
+}
+.dialog-radio {
+  display: block;
+  margin: 4px 0;
+  font-size: 0.9rem;
+  color: #e6ebf5;
+  cursor: pointer;
+}
+.dialog-radio input {
+  margin-right: 6px;
+  accent-color: #4f8cff;
+}
+.dialog-number {
+  width: 120px;
+  padding: 0.4em 0.6em;
+  border-radius: 6px;
+  border: 1px solid #3a4a6b;
+  background: #2b3858;
+  color: #fff;
+  font-size: 0.9rem;
+}
+.dialog-format-note {
+  font-size: 0.85rem;
+  color: #9aa7c2;
+}
+.dialog-msg {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #233355;
+  font-size: 0.85rem;
+  color: #a8e6b0;
+  word-break: break-all;
+}
+.dialog-msg-error {
+  background: #3b2430;
+  color: #f2a0a0;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+.dialog-btn {
+  padding: 0.45em 1.2em;
+  border-radius: 6px;
+  border: 1px solid #3a4a6b;
+  background: #2b3858;
+  color: #e6ebf5;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.dialog-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.dialog-btn-primary {
+  border-color: #4f8cff;
+  background-color: #4f8cff;
+  color: #fff;
+  font-weight: 600;
+}
+.dialog-btn-primary:hover:not(:disabled) {
+  background-color: #3a78ec;
+}
+
 /* ---------- 扫描目标选择（三段式下拉） ---------- */
 .drive-selector {
   position: relative;

@@ -27,3 +27,8 @@ commands.allow = ["pick_folder"]
 identifier = "allow-cancel-scan"
 description = "Allow the frontend to invoke the cancel_scan command"
 commands.allow = ["cancel_scan"]
+
+[[permission]]
+identifier = "allow-export-scan-data"
+description = "Allow the frontend to invoke the export_scan_data command"
+commands.allow = ["export_scan_data"]

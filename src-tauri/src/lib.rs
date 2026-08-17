@@ -6,6 +6,7 @@ mod api_tests;
 
 use models::{DriveInfo, ScanResult, TreeNode};
 use scanner::prune::TopNMode;
+use serde::Serialize;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,119 @@ impl Default for AppState {
             cancel: Mutex::new(None),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 数据导出（export_scan_data）：把最近一次扫描的全量树导出为带绝对路径的
+// JSON 文件，供外部工具 / AI agent 直接读取（免去重新扫描）。
+// ---------------------------------------------------------------------------
+
+/// 导出用的树节点：在 `TreeNode` 基础上补全**绝对路径** `path` 与 `is_dir`。
+/// agent 拿到后可直接按 path 定位要清理的目录/文件。
+#[derive(Serialize, Clone)]
+struct ExportNode {
+    path: String,
+    name: String,
+    size: u64,
+    allocated_size: u64,
+    file_count: u32,
+    folder_count: u32,
+    last_modified: i64,
+    is_dir: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<ExportNode>,
+}
+
+#[derive(Serialize)]
+struct ExportSummary {
+    /// 导出树中的节点总数（含目录与文件）。
+    node_count: u64,
+    dir_count: u64,
+    file_count: u64,
+    total_size: u64,
+}
+
+#[derive(Serialize)]
+struct ExportPayload {
+    app: &'static str,
+    version: &'static str,
+    exported_at: String,
+    /// "full" 或 "filtered"。
+    mode: &'static str,
+    /// 过滤阈值（字节）；全量导出为 0。
+    min_size_bytes: u64,
+    root_path: String,
+    summary: ExportSummary,
+    root: ExportNode,
+}
+
+/// 拼接绝对路径。`parent` 为空表示根节点（直接用 name，如 "C:" / "/"）。
+fn join_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        return name.to_string();
+    }
+    #[cfg(target_os = "windows")]
+    let sep = "\\";
+    #[cfg(not(target_os = "windows"))]
+    let sep = "/";
+    // 已以分隔符结尾（如 "/" 或 "C:\"）直接拼接，避免 "//home" 双斜杠
+    if parent.ends_with('\\') || parent.ends_with('/') {
+        format!("{parent}{name}")
+    } else {
+        // 盘符 "C:" 或普通路径都补一个分隔符
+        format!("{parent}{sep}{name}")
+    }
+}
+
+/// 目录节点判定（与 prune 的 `is_dir_child` 语义一致）：文件叶子当且仅当
+/// `file_count==1 && folder_count==0 && children.is_empty()`。
+fn is_dir_node(n: &TreeNode) -> bool {
+    !(n.file_count == 1 && n.folder_count == 0 && n.children.is_empty())
+}
+
+/// 把缓存的全量树构建为导出树。`threshold` 为过滤阈值（字节）：
+/// - `threshold == 0`：全量导出，不过滤
+/// - `threshold > 0`：过滤导出，只保留 `size >= threshold` 的目录（递归）与文件；
+///   根节点始终保留（作为锚点），其子树仍按阈值裁剪
+fn build_export_node(node: &TreeNode, parent_path: &str, threshold: u64) -> ExportNode {
+    let path = join_path(parent_path, &node.name);
+    let is_dir = is_dir_node(node);
+    let children = if is_dir {
+        node.children
+            .iter()
+            .map(|c| build_export_node(c, &path, threshold))
+            .filter(|c| threshold == 0 || c.size >= threshold)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ExportNode {
+        path,
+        name: node.name.clone(),
+        size: node.size,
+        allocated_size: node.allocated_size,
+        file_count: node.file_count,
+        folder_count: node.folder_count,
+        last_modified: node.last_modified,
+        is_dir,
+        children,
+    }
+}
+
+fn count_export_nodes(n: &ExportNode) -> (u64, u64, u64) {
+    let (mut nodes, mut dirs, mut files) = (1u64, 0u64, 0u64);
+    if n.is_dir {
+        dirs += 1;
+    } else {
+        files += 1;
+    }
+    for c in &n.children {
+        let (cn, cd, cf) = count_export_nodes(c);
+        nodes += cn;
+        dirs += cd;
+        files += cf;
+    }
+    (nodes, dirs, files)
 }
 
 #[cfg(not(test))]
@@ -373,6 +487,92 @@ fn cancel_scan(state: tauri::State<'_, AppState>) {
     }
 }
 
+/// Export the cached full scan tree as a JSON file with absolute paths.
+///
+/// `filter=false` exports the whole tree; `filter=true` keeps only nodes whose
+/// size >= `min_size_mb` (directories recursively, files individually; the root
+/// is always kept as an anchor). Pops a native "save as" dialog for the target
+/// path (default filename includes a timestamp), writes the file, and returns
+/// the saved path. Returns an error if no scan has been cached yet or the user
+/// cancels the dialog.
+#[cfg(not(test))]
+#[tauri::command]
+#[allow(unused_variables)] // `window` 仅 Windows 分支使用（对话框父窗口）
+fn export_scan_data(
+    window: tauri::Window,
+    state: tauri::State<'_, AppState>,
+    filter: bool,
+    min_size_mb: u64,
+) -> Result<String, String> {
+    let threshold: u64 = if filter {
+        min_size_mb.saturating_mul(1024 * 1024)
+    } else {
+        0
+    };
+
+    // 锁内只做"构建导出树"（遍历+拼路径，毫秒级），随后立即释放锁，
+    // 避免在用户慢慢挑保存位置时阻塞 get_node / scan_drive。
+    let (root_path, export_root) = {
+        let guard = state
+            .tree
+            .lock()
+            .map_err(|_| "scan state mutex poisoned".to_string())?;
+        let root = guard
+            .as_ref()
+            .ok_or_else(|| "no scan result cached; run scan_drive first".to_string())?;
+        (root.name.clone(), build_export_node(root, "", threshold))
+    };
+
+    let (node_count, dir_count, file_count) = count_export_nodes(&export_root);
+    let now = chrono::Local::now();
+    let mode: &'static str = if filter { "filtered" } else { "full" };
+    let payload = ExportPayload {
+        app: "DiskLens",
+        version: env!("CARGO_PKG_VERSION"),
+        exported_at: now.format("%Y-%m-%d %H:%M:%S %z").to_string(),
+        mode,
+        min_size_bytes: threshold,
+        root_path,
+        summary: ExportSummary {
+            node_count,
+            dir_count,
+            file_count,
+            total_size: export_root.size,
+        },
+        root: export_root,
+    };
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("序列化失败: {e}"))?;
+
+    // 默认文件名带时间戳：disklens-filtered-500mb-20260817-140630.json
+    let default_name = if filter {
+        format!(
+            "disklens-filtered-{}mb-{}.json",
+            min_size_mb,
+            now.format("%Y%m%d-%H%M%S")
+        )
+    } else {
+        format!("disklens-full-{}.json", now.format("%Y%m%d-%H%M%S"))
+    };
+
+    // `mut` 仅在 Windows 分支需要（Linux 分支无 set_parent 赋值）。
+    #[allow(unused_mut)]
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("导出扫描数据")
+        .set_file_name(&default_name)
+        .add_filter("JSON", &["json"]);
+    #[cfg(target_os = "windows")]
+    {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog
+        .save_file()
+        .ok_or_else(|| "导出已取消".to_string())?;
+
+    std::fs::write(&path, json).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Open the native Windows folder-picker (IFileDialog via `rfd`) and return the
 /// chosen folder path, or `None` if the user cancelled. The Tauri window is
 /// passed as the dialog's parent so the dialog always appears on top of the app
@@ -405,7 +605,8 @@ pub fn run() {
             get_node,
             list_drives,
             pick_folder,
-            cancel_scan
+            cancel_scan,
+            export_scan_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

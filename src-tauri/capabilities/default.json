@@ -11,6 +11,7 @@
     "allow-get-node",
     "allow-list-drives",
     "allow-pick-folder",
-    "allow-cancel-scan"
+    "allow-cancel-scan",
+    "allow-export-scan-data"
   ]
 }

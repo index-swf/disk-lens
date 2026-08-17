@@ -10,6 +10,7 @@ import DriveSelector, { pushRecent } from "./components/DriveSelector";
 import ScanProgress from "./components/ScanProgress";
 import DebugPanel from "./components/DebugPanel";
 import StatusBar from "./components/StatusBar";
+import ExportDialog from "./components/ExportDialog";
 import TreeTable, { type SortKey, type SortDir } from "./components/TreeTable";
 import "./App.css";
 
@@ -75,6 +76,7 @@ export default function App() {
   const [drilling, setDrilling] = useState(false);
   const [progress, setProgress] = useState<ScanProgressType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [sortKey, setSortKey] = useState<SortKey>("size");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -195,6 +197,14 @@ export default function App() {
         <button className="scan-btn" onClick={handleScan} disabled={scanning}>
           {scanning ? "扫描中…" : "开始扫描"}
         </button>
+        <button
+          className="export-btn"
+          onClick={() => setExportOpen(true)}
+          disabled={!root || scanning}
+          title={root ? "导出扫描数据（JSON）" : "请先扫描"}
+        >
+          导出
+        </button>
       </header>
 
       {/* 调试面板仅在开发环境显示，release 打包自动隐藏 */}
@@ -248,6 +258,8 @@ export default function App() {
       )}
 
       <StatusBar result={scanResult} />
+
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} />
     </div>
   );
 }

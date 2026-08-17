@@ -303,6 +303,91 @@ fn enumerate_drives_unix_filters_noise_and_unescapes() {
     }
 }
 
+// ---------- 10. 数据导出：build_export_node（路径拼接 + 过滤） ----------
+
+#[test]
+fn join_path_platform_style() {
+    use crate::join_path;
+    #[cfg(target_os = "windows")]
+    {
+        assert_eq!(join_path("", "C:"), "C:");
+        assert_eq!(join_path("C:", "Users"), "C:\\Users");
+        assert_eq!(join_path("C:\\Users", "index"), "C:\\Users\\index");
+        assert_eq!(join_path("C:\\Users\\", "index"), "C:\\Users\\index");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert_eq!(join_path("", "/"), "/");
+        assert_eq!(join_path("/", "home"), "/home");
+        assert_eq!(join_path("/home", "caoyy"), "/home/caoyy");
+        assert_eq!(join_path("/home/", "caoyy"), "/home/caoyy");
+    }
+}
+
+#[test]
+fn export_full_keeps_all_nodes_with_paths() {
+    use crate::build_export_node;
+    // 根 C: -> dirA(大文件+小文件) + dirB
+    let big_file = node("big.bin", 800, 1, 0, vec![]);
+    let small_file = node("small.txt", 10, 1, 0, vec![]);
+    let dir_a = dir("dirA", 810, vec![big_file, small_file]);
+    let dir_b = dir("dirB", 50, vec![]);
+    let root = dir("C:", 860, vec![dir_a, dir_b]);
+
+    let export = build_export_node(&root, "", 0); // 全量
+    assert_eq!(export.children.len(), 2, "全量导出应保留全部子节点");
+    let a = &export.children[0];
+    assert_eq!(a.children.len(), 2, "dirA 的两个文件都应保留");
+    assert!(a.children.iter().any(|f| f.name == "big.bin" && !f.is_dir));
+    assert!(a.children.iter().any(|f| f.name == "small.txt" && !f.is_dir));
+
+    // 根 path 直接等于根名（join_path("", name) == name，两平台通用）；
+    // 子节点 path 以其父路径为前缀（绝对路径语义）
+    assert_eq!(export.path, "C:", "根 path 应等于根名");
+    assert!(a.path.contains("dirA"), "dirA path: {}", a.path);
+    assert!(a.path.ends_with("dirA"), "dirA path 应以 dirA 结尾: {}", a.path);
+}
+
+#[test]
+fn export_filter_keeps_large_only() {
+    use crate::build_export_node;
+    // 阈值 60（MB 语义用字节直接构造，这里用 60 作字节阈值）
+    let big_file = node("big.bin", 80, 1, 0, vec![]);
+    let small_file = node("small.txt", 10, 1, 0, vec![]);
+    let dir_a = dir("dirA", 90, vec![big_file, small_file]);
+    let dir_b = dir("dirB", 50, vec![]);
+    let root = dir("C:", 140, vec![dir_a, dir_b]);
+
+    let export = build_export_node(&root, "", 60);
+    // 根始终保留；dirA(90>=60) 保留、dirB(50<60) 滤掉
+    assert_eq!(export.children.len(), 1, "只应保留 dirA");
+    assert_eq!(export.children[0].name, "dirA");
+    // dirA 内：big.bin(80>=60) 保留、small.txt(10<60) 滤掉
+    assert_eq!(export.children[0].children.len(), 1);
+    assert_eq!(export.children[0].children[0].name, "big.bin");
+    // 文件 path 应包含 dirA 前缀（分隔符平台相关，不硬编码）
+    assert!(
+        export.children[0].children[0].path.contains("dirA"),
+        "big.bin path: {}",
+        export.children[0].children[0].path
+    );
+    assert!(export.children[0].children[0].path.ends_with("big.bin"));
+}
+
+#[test]
+fn export_summary_counts() {
+    use crate::{build_export_node, count_export_nodes};
+    let f1 = node("f1", 1, 1, 0, vec![]);
+    let f2 = node("f2", 1, 1, 0, vec![]);
+    let sub = dir("sub", 2, vec![f1]);
+    let root = dir("root", 4, vec![sub, f2]);
+    let export = build_export_node(&root, "", 0);
+    let (nodes, dirs, files) = count_export_nodes(&export);
+    assert_eq!(nodes, 4, "root+sub+f1+f2");
+    assert_eq!(dirs, 2, "root+sub");
+    assert_eq!(files, 2, "f1+f2");
+}
+
 // ---------- 9. prune：merge_files=false 必须保留散文件（回归测试） ----------
 
 #[test]
