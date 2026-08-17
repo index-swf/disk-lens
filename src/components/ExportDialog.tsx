@@ -13,7 +13,7 @@ type ExportType = "human" | "agent";
  * - 导出方式：全量导出 / 过滤导出（只保留 ≥ N MB 的目录与文件，默认 500）
  * - 导出类型：
  *   - 适合人类阅读（human）：树状 YAML，保留目录层级缩进
- *   - 适合 Agent 读取（agent）：扁平 NDJSON，每行一个节点，可流式解析
+ *   - 适合 Agent 读取（agent）：扁平 JSONL，每行一个节点，可流式解析
  */
 export default function ExportDialog({ open, onClose }: ExportDialogProps) {
   const [filter, setFilter] = useState(false);
@@ -122,8 +122,8 @@ export default function ExportDialog({ open, onClose }: ExportDialogProps) {
             />
             适合 Agent 读取（Agent readable）
           </label>
-          <div className="dialog-format-note">
-            数据格式：扁平 NDJSON（JSON Lines）—— 每行一个节点对象，含绝对路径、
+            <div className="dialog-format-note">
+            数据格式：扁平 JSONL（JSON Lines）—— 每行一个节点对象，含绝对路径、
             size_self / size_total / actual_size_self、depth、parent 等字段。
             层次结构：所有节点平铺，无嵌套，通过 parent 字段可重建树，便于程序流式解析。
           </div>

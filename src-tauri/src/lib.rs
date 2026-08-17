@@ -41,7 +41,7 @@ impl Default for AppState {
 
 /// 导出用的树节点：在 `TreeNode` 基础上补全**绝对路径** `path` 与 `is_dir`，
 /// 以及区分"自身大小 / 含后代大小 / 自身实际占用"的字段。
-/// 供"适合人类阅读"的树状 YAML 使用，也是扁平 NDJSON（agent 模式）的来源。
+/// 供"适合人类阅读"的树状 YAML 使用，也是扁平 JSONL（agent 模式）的来源。
 #[derive(Serialize, Clone)]
 struct ExportNode {
     path: String,
@@ -87,7 +87,7 @@ struct ExportPayload {
     root: ExportNode,
 }
 
-/// 扁平 NDJSON（agent 模式）的单行节点 —— 每行一个节点对象，schema v2。
+/// 扁平 JSONL（agent 模式）的单行节点 —— 每行一个节点对象，schema v2。
 /// 所有大小字段为 int64 字节；`depth`/`parent` 供 agent 快速判断层级并
 /// O(n) 重建树（无需递归解析嵌套结构）。
 #[derive(Serialize)]
@@ -118,7 +118,7 @@ struct AgentNode {
     matched: Option<&'static str>,
 }
 
-/// agent 模式的元信息文件（与 .ndjson 同名 .meta.json），供程序免解析全量。
+/// agent 模式的元信息文件（与 .jsonl 同名 .meta.json），供程序免解析全量。
 #[derive(Serialize)]
 struct AgentMeta {
     app: &'static str,
@@ -132,7 +132,7 @@ struct AgentMeta {
     line_count: u64,
 }
 
-/// 把导出树流式写成 NDJSON 行（每行一个节点，\n 结尾；先序遍历）。
+/// 把导出树流式写成 JSONL 行（每行一个节点，\n 结尾；先序遍历）。
 /// `threshold` > 0 时为过滤模式，输出每个节点的 `matched` 保留原因。
 fn write_agent_rows(
     w: &mut impl std::io::Write,
@@ -604,7 +604,7 @@ fn cancel_scan(state: tauri::State<'_, AppState>) {
 ///
 /// `export_type` selects the format:
 /// - `"human"`（适合人类阅读）: 树状 YAML（保留目录层级缩进）。
-/// - `"agent"`（适合 Agent 读取）: 扁平 NDJSON（每行一个节点，含
+/// - `"agent"`（适合 Agent 读取）: 扁平 JSONL（每行一个节点，含
 ///   size_self/size_total/actual_size_self/depth/parent，可流式解析），
 ///   并额外写入同目录同名 `.meta.json` 元信息文件。
 ///
@@ -655,7 +655,7 @@ fn export_scan_data(
 
     // 默认文件名带时间戳：disklens-human-20260817-140630.yaml 等
     let default_name = if agent_mode {
-        format!("disklens-agent-{ts}.ndjson")
+        format!("disklens-agent-{ts}.jsonl")
     } else {
         format!("disklens-human-{ts}.yaml")
     };
@@ -666,8 +666,8 @@ fn export_scan_data(
         .set_title("导出扫描数据")
         .set_file_name(&default_name)
         .add_filter(
-            if agent_mode { "NDJSON" } else { "YAML" },
-            &[if agent_mode { "ndjson" } else { "yaml" }],
+            if agent_mode { "JSON Lines" } else { "YAML" },
+            &[if agent_mode { "jsonl" } else { "yaml" }],
         );
     #[cfg(target_os = "windows")]
     {
@@ -678,12 +678,12 @@ fn export_scan_data(
         .ok_or_else(|| "导出已取消".to_string())?;
 
     if agent_mode {
-        // ---- agent readable：扁平 NDJSON（流式写，避免全量构建内存翻倍） ----
+        // ---- agent readable：扁平 JSONL（流式写，避免全量构建内存翻倍） ----
         let file = std::fs::File::create(&path).map_err(|e| format!("创建文件失败: {e}"))?;
         let mut buf = std::io::BufWriter::new(file);
         write_agent_rows(&mut buf, &export_root, None, 0, threshold)
-            .map_err(|e| format!("写入 NDJSON 失败: {e}"))?;
-        buf.flush().map_err(|e| format!("写入 NDJSON 失败: {e}"))?;
+            .map_err(|e| format!("写入 JSONL 失败: {e}"))?;
+        buf.flush().map_err(|e| format!("写入 JSONL 失败: {e}"))?;
 
         // 同目录同名 .meta.json 元信息
         let meta = AgentMeta {
