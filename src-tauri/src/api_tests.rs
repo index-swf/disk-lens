@@ -348,8 +348,8 @@ fn export_full_keeps_all_nodes_with_paths() {
     assert!(a.path.ends_with("dirA"), "dirA path 应以 dirA 结尾: {}", a.path);
 
     // 占父目录百分比：根=100；dirA = 810/860 = 94.19
-    assert_eq!(export.pct_of_parent, 100.0);
-    assert!((a.pct_of_parent - (810.0 / 860.0 * 100.0)).abs() < 0.01);
+    assert_eq!(export.percent_of_parent, 100.0);
+    assert!((a.percent_of_parent - (810.0 / 860.0 * 100.0)).abs() < 0.01);
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn export_filter_keeps_large_only() {
     );
     assert!(export.children[0].children[0].path.ends_with("big.bin"));
     // 占父目录百分比：big.bin 占 dirA = 80/90*100 ≈ 88.89
-    let pct = export.children[0].children[0].pct_of_parent;
+    let pct = export.children[0].children[0].percent_of_parent;
     assert!((pct - 80.0 / 90.0 * 100.0).abs() < 0.01, "pct={pct}");
 }
 

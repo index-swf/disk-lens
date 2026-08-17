@@ -47,7 +47,7 @@ struct ExportNode {
     name: String,
     size: u64,
     /// 占父目录大小的百分比（0-100，保留两位小数）；根节点为 100。
-    pct_of_parent: f64,
+    percent_of_parent: f64,
     file_count: u32,
     folder_count: u32,
     last_modified: i64,
@@ -104,7 +104,7 @@ fn is_dir_node(n: &TreeNode) -> bool {
 }
 
 /// 把缓存的全量树构建为导出树。`parent_size` 用于计算占父目录百分比
-/// （根节点传 0 → pct_of_parent = 100）。`threshold` 为过滤阈值（字节）：
+/// （根节点传 0 → percent_of_parent = 100）。`threshold` 为过滤阈值（字节）：
 /// - `threshold == 0`：全量导出，不过滤
 /// - `threshold > 0`：过滤导出，只保留 `size >= threshold` 的目录（递归）与文件；
 ///   根节点始终保留（作为锚点），其子树仍按阈值裁剪
@@ -116,7 +116,7 @@ fn build_export_node(
 ) -> ExportNode {
     let path = join_path(parent_path, &node.name);
     let is_dir = is_dir_node(node);
-    let pct_of_parent = if parent_size > 0 {
+    let percent_of_parent = if parent_size > 0 {
         ((node.size as f64 / parent_size as f64) * 100.0 * 100.0).round() / 100.0
     } else {
         100.0
@@ -134,7 +134,7 @@ fn build_export_node(
         path,
         name: node.name.clone(),
         size: node.size,
-        pct_of_parent,
+        percent_of_parent,
         file_count: node.file_count,
         folder_count: node.folder_count,
         last_modified: node.last_modified,
