@@ -39,13 +39,15 @@ impl Default for AppState {
 // ---------------------------------------------------------------------------
 
 /// 导出用的树节点：在 `TreeNode` 基础上补全**绝对路径** `path` 与 `is_dir`。
-/// agent 拿到后可直接按 path 定位要清理的目录/文件。
+/// agent 拿到后可直接按 path 定位要清理的目录/文件。字段刻意精简
+/// （无 allocated_size），并用紧凑 JSON 序列化，尽量节省 agent 的 token。
 #[derive(Serialize, Clone)]
 struct ExportNode {
     path: String,
     name: String,
     size: u64,
-    allocated_size: u64,
+    /// 占父目录大小的百分比（0-100，保留两位小数）；根节点为 100。
+    pct_of_parent: f64,
     file_count: u32,
     folder_count: u32,
     last_modified: i64,
@@ -101,17 +103,28 @@ fn is_dir_node(n: &TreeNode) -> bool {
     !(n.file_count == 1 && n.folder_count == 0 && n.children.is_empty())
 }
 
-/// 把缓存的全量树构建为导出树。`threshold` 为过滤阈值（字节）：
+/// 把缓存的全量树构建为导出树。`parent_size` 用于计算占父目录百分比
+/// （根节点传 0 → pct_of_parent = 100）。`threshold` 为过滤阈值（字节）：
 /// - `threshold == 0`：全量导出，不过滤
 /// - `threshold > 0`：过滤导出，只保留 `size >= threshold` 的目录（递归）与文件；
 ///   根节点始终保留（作为锚点），其子树仍按阈值裁剪
-fn build_export_node(node: &TreeNode, parent_path: &str, threshold: u64) -> ExportNode {
+fn build_export_node(
+    node: &TreeNode,
+    parent_path: &str,
+    parent_size: u64,
+    threshold: u64,
+) -> ExportNode {
     let path = join_path(parent_path, &node.name);
     let is_dir = is_dir_node(node);
+    let pct_of_parent = if parent_size > 0 {
+        ((node.size as f64 / parent_size as f64) * 100.0 * 100.0).round() / 100.0
+    } else {
+        100.0
+    };
     let children = if is_dir {
         node.children
             .iter()
-            .map(|c| build_export_node(c, &path, threshold))
+            .map(|c| build_export_node(c, &path, node.size, threshold))
             .filter(|c| threshold == 0 || c.size >= threshold)
             .collect()
     } else {
@@ -121,7 +134,7 @@ fn build_export_node(node: &TreeNode, parent_path: &str, threshold: u64) -> Expo
         path,
         name: node.name.clone(),
         size: node.size,
-        allocated_size: node.allocated_size,
+        pct_of_parent,
         file_count: node.file_count,
         folder_count: node.folder_count,
         last_modified: node.last_modified,
@@ -520,7 +533,7 @@ fn export_scan_data(
         let root = guard
             .as_ref()
             .ok_or_else(|| "no scan result cached; run scan_drive first".to_string())?;
-        (root.name.clone(), build_export_node(root, "", threshold))
+        (root.name.clone(), build_export_node(root, "", 0, threshold))
     };
 
     let (node_count, dir_count, file_count) = count_export_nodes(&export_root);
@@ -541,8 +554,8 @@ fn export_scan_data(
         },
         root: export_root,
     };
-    let json = serde_json::to_string_pretty(&payload)
-        .map_err(|e| format!("序列化失败: {e}"))?;
+    // 紧凑序列化（无缩进）：减少导出体积，节省 agent 读取时的 token
+    let json = serde_json::to_string(&payload).map_err(|e| format!("序列化失败: {e}"))?;
 
     // 默认文件名带时间戳：disklens-filtered-500mb-20260817-140630.json
     let default_name = if filter {

@@ -334,7 +334,7 @@ fn export_full_keeps_all_nodes_with_paths() {
     let dir_b = dir("dirB", 50, vec![]);
     let root = dir("C:", 860, vec![dir_a, dir_b]);
 
-    let export = build_export_node(&root, "", 0); // 全量
+    let export = build_export_node(&root, "", 0, 0); // 全量
     assert_eq!(export.children.len(), 2, "全量导出应保留全部子节点");
     let a = &export.children[0];
     assert_eq!(a.children.len(), 2, "dirA 的两个文件都应保留");
@@ -346,6 +346,10 @@ fn export_full_keeps_all_nodes_with_paths() {
     assert_eq!(export.path, "C:", "根 path 应等于根名");
     assert!(a.path.contains("dirA"), "dirA path: {}", a.path);
     assert!(a.path.ends_with("dirA"), "dirA path 应以 dirA 结尾: {}", a.path);
+
+    // 占父目录百分比：根=100；dirA = 810/860 = 94.19
+    assert_eq!(export.pct_of_parent, 100.0);
+    assert!((a.pct_of_parent - (810.0 / 860.0 * 100.0)).abs() < 0.01);
 }
 
 #[test]
@@ -358,7 +362,7 @@ fn export_filter_keeps_large_only() {
     let dir_b = dir("dirB", 50, vec![]);
     let root = dir("C:", 140, vec![dir_a, dir_b]);
 
-    let export = build_export_node(&root, "", 60);
+    let export = build_export_node(&root, "", 0, 60);
     // 根始终保留；dirA(90>=60) 保留、dirB(50<60) 滤掉
     assert_eq!(export.children.len(), 1, "只应保留 dirA");
     assert_eq!(export.children[0].name, "dirA");
@@ -372,6 +376,9 @@ fn export_filter_keeps_large_only() {
         export.children[0].children[0].path
     );
     assert!(export.children[0].children[0].path.ends_with("big.bin"));
+    // 占父目录百分比：big.bin 占 dirA = 80/90*100 ≈ 88.89
+    let pct = export.children[0].children[0].pct_of_parent;
+    assert!((pct - 80.0 / 90.0 * 100.0).abs() < 0.01, "pct={pct}");
 }
 
 #[test]
@@ -381,7 +388,7 @@ fn export_summary_counts() {
     let f2 = node("f2", 1, 1, 0, vec![]);
     let sub = dir("sub", 2, vec![f1]);
     let root = dir("root", 4, vec![sub, f2]);
-    let export = build_export_node(&root, "", 0);
+    let export = build_export_node(&root, "", 0, 0);
     let (nodes, dirs, files) = count_export_nodes(&export);
     assert_eq!(nodes, 4, "root+sub+f1+f2");
     assert_eq!(dirs, 2, "root+sub");
