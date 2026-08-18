@@ -3,6 +3,7 @@ name = "disk-lens"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+authors = ["index-swf <index-swf@users.noreply.github.com>"]
 
 [lib]
 name = "disk_lens_lib"

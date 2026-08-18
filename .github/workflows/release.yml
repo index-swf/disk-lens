@@ -22,8 +22,20 @@ jobs:
         include:
           - os: windows-latest
             artifact: disk-lens.exe
-          - os: ubuntu-latest
+            # Windows 保持绿色版 exe（不产出安装包）
+            build_args: --no-bundle
+            upload_paths: |
+              src-tauri/target/release/disk-lens.exe
+          # ubuntu-22.04 而非 ubuntu-latest：glibc 兼容性基准。
+          # 在 24.04 上编出的二进制要求更高 glibc，Ubuntu 20.04 等旧系统
+          # 会报 "GLIBC_2.33 not found"。22.04 自带 libwebkit2gtk-4.1-dev。
+          - os: ubuntu-22.04
             artifact: disk-lens
+            # 一次产出：绿色版二进制 + .deb（apt/dpkg 安装）+ .AppImage（单文件）
+            build_args: --bundles deb,appimage
+            upload_paths: |
+              src-tauri/target/release/disk-lens
+              src-tauri/target/release/bundle/
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -72,20 +84,19 @@ jobs:
         # lockfile 仍提交，版本锁定不变；build 批准走 workspace 配置。
         run: pnpm install
 
-      # 仅构建 release 二进制（--no-bundle：跳过安装包，产出绿色版可执行文件；
-      # 前端 dist 仍会嵌入二进制）。以后要恢复 MSI/NSIS/AppImage：去掉 --no-bundle，
-      # 并把上传步骤换成 tauri-apps/tauri-action。
-      - name: Build release (portable binary)
-        # 注意不要写 `pnpm tauri build -- --no-bundle`：pnpm 会把 -- 后的
-        # 参数原样透传，tauri CLI 再转发给 cargo build，导致
-        # "unexpected argument '--no-bundle'"。--no-bundle 是 tauri 顶层标志。
-        run: pnpm tauri build --no-bundle
+      # Windows：--no-bundle 只出绿色版 exe（保持现状）；
+      # Linux：--bundles deb,appimage 一次产出绿色版 + .deb + .AppImage。
+      # 注意不要写 `pnpm tauri build -- --bundles ...`：pnpm 会把 -- 后的参数
+      # 原样透传，tauri CLI 再转发给 cargo build，导致 "unexpected argument"。
+      # --bundles / --no-bundle 都是 tauri 顶层标志。
+      - name: Build release (portable binary + bundles)
+        run: pnpm tauri build ${{ matrix.build_args }}
 
-      - name: Upload portable binary artifact
+      - name: Upload artifacts (portable binary + bundles)
         uses: actions/upload-artifact@v4
         with:
           name: portable-${{ matrix.os }}
-          path: src-tauri/target/release/${{ matrix.artifact }}
+          path: ${{ matrix.upload_paths }}
           if-no-files-found: error
 
   publish:
@@ -105,24 +116,26 @@ jobs:
           name: portable-windows-latest
           path: dist-windows
 
-      - name: Download Linux portable binary
+      - name: Download Linux binary + bundles
         uses: actions/download-artifact@v4
         with:
-          name: portable-ubuntu-latest
+          name: portable-ubuntu-22.04
           path: dist-linux
 
-      # 手工创建 draft release 并上传两个绿色版二进制。
+      # 手工创建 draft release 并上传所有产物。
       # 推 tag 时用 tag 名；手工触发时用 manual-<run_number>，不污染 tag 列表。
-      - name: Create draft release & upload binaries
+      - name: Create draft release & upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NOTES: |
             ## DiskLens ${{ github.ref_type == 'tag' && github.ref_name || 'manual build' }}
 
-            Windows 磁盘占用分析器。附件为**绿色版可执行文件**（免安装，直接运行）：
+            Windows / Linux 磁盘占用分析器。附件说明：
 
             - **`disk-lens.exe`** — Windows 绿色版（Windows 10/11 + WebView2 Runtime，Win11 自带）
             - **`disk-lens`** — Linux 绿色版（Ubuntu 22.04/24.04，需 WebKitGTK 运行库）
+            - **`disk-lens_*.deb`** — Ubuntu/Debian 安装包（`sudo apt install ./disk-lens_*.deb`）
+            - **`disk-lens_*.AppImage`** — Linux 单文件版（`chmod +x` 后直接运行）
         shell: bash
         run: |
           TAG="${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_number) }}"
@@ -130,7 +143,9 @@ jobs:
           gh release create "$TAG" \
             dist-windows/disk-lens.exe \
             dist-linux/disk-lens \
+            dist-linux/bundle/deb/*.deb \
+            dist-linux/bundle/appimage/*.AppImage \
             --title "$TITLE" \
             --notes "$RELEASE_NOTES" \
             --draft
-          echo "created release $TAG with portable binaries"
+          echo "created release $TAG with all assets"
