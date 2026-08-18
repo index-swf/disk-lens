@@ -719,7 +719,7 @@ fn export_scan_data(
             summary,
             root: export_root,
         };
-        let yaml = serde_yaml::to_string(&payload).map_err(|e| format!("序列化失败: {e}"))?;
+        let yaml = serde_yml::to_string(&payload).map_err(|e| format!("序列化失败: {e}"))?;
         std::fs::write(&path, yaml).map_err(|e| format!("写入文件失败: {e}"))?;
         Ok(path.to_string_lossy().into_owned())
     }
@@ -750,7 +750,6 @@ fn pick_folder(window: tauri::Window) -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             scan_drive,

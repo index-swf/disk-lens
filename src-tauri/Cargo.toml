@@ -14,15 +14,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 导出"适合人类阅读"的树状 YAML
-serde_yaml = "0.9"
+# 导出"适合人类阅读"的树状 YAML（serde_yaml 0.9 已 deprecated，用其社区 fork serde_yml）
+serde_yml = "0.0"
 # 导出文件时间戳 / exported_at 字段
 chrono = "0.4"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
 rayon = "1.10"
 # 原生文件夹选择对话框（Windows IFileDialog / Linux GTK，供"自定义扫描路径"使用）
 rfd = "0.15"
