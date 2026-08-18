@@ -57,10 +57,16 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # key 必须含 matrix.os：Swatinem/rust-cache 默认 key 只含 rustc 版本 +
+      # Cargo.lock hash + target，同 target 的 ubuntu-latest(24.04) 和
+      # ubuntu-22.04 会共享缓存 → 22.04 复用 24.04 编出的 glibc 2.39 产物，
+      # 编译 glib 时报 "GLIBC_2.39 not found" / "can't find crate for glib"。
+      # 加 key: ${{ matrix.os }} 后各 runner 独立缓存，互不复用。
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.os }}
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
